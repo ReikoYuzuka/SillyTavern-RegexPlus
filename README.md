@@ -4,7 +4,7 @@ SillyTavern 正则引擎插件：RP-Hub 角色卡的正则解释器与渲染管�
 
 > ⚠️ **与原有的正则扩展不兼容，需要主动关闭原版 Regex 扩展**，再启用本插件（两者会同时接管正则处理）。
 
-**安装**：把本目录放进 `SillyTavern/public/scripts/extensions/third-party/`（目录名保持 `rp-hub-compat`），扩展设置里启用；同时**关闭原版 `Regex` 扩展**。
+**安装**：把本目录放进 `SillyTavern/public/scripts/extensions/third-party/`（目录名任意，建议保持 `SillyTavern-RegexPlus`），扩展设置里启用；同时**关闭原版 `Regex` 扩展**。
 
 ## 新增功能
 

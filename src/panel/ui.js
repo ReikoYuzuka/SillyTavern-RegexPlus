@@ -68,10 +68,13 @@ const TEMPLATE_PATHS = {
     presetEmbeddedScripts: 'presetEmbeddedScripts',
 };
 
+/** 扩展根目录（动态推导，不硬编码目录名）：本文件位于 <ext>/src/panel/ui.js，模板在 <ext>/ 下。 */
+const EXTENSION_ROOT = new URL('../../', import.meta.url).href;
+
 async function loadTemplate(name) {
     const id = TEMPLATE_PATHS[name];
     if (!id) throw new Error(`Unknown template: ${name}`);
-    return renderTemplateAsync(`/scripts/extensions/third-party/rp-hub-compat/${id}.html`, {}, true, true, true);
+    return renderTemplateAsync(`${EXTENSION_ROOT}${id}.html`, {}, true, true, true);
 }
 
 // ---------------------------------------------------------------------------
