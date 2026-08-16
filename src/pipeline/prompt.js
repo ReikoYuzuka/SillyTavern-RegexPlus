@@ -54,9 +54,9 @@ export async function rphubCompatPromptInterceptor(chat, contextSize, abort, typ
     if (runtime.getCleanPrompt?.() !== true) return;
     if (!Array.isArray(chat) || chat.length === 0) return;
     const mode = await runtime.getMode();
-    // ⚠️ 仅 rphub 模式接管 prompt：原版卡（st）的提示词由 ST 原生正则处理，本插件不介入
-    //   （否则 promptOnly 脚本被插件 + ST 原生应用两次 → 原版卡提示词被二次改写）。
-    if (mode !== 'rphub') return;
+    // st 卡 prompt 接管门控：原版扩展在跑 → ST 原生正则处理（避免双重应用）；
+    // 原版扩展关闭 → 本引擎 legacy 补位（verbatim 语义，逐字复刻原版 placement/depth/promptOnly）。
+    if (mode !== 'rphub' && runtime.nativeRegexRunning()) return;
     const scripts = runtime.getScripts(mode);
     if (scripts.length === 0) return;
 
@@ -112,9 +112,8 @@ export async function onGenerateBeforeCombinePrompts(data) {
     if (runtime.getCleanPrompt?.() !== true) return;
     if (!data || typeof data !== 'object') return;
     const mode = await runtime.getMode();
-    // ⚠️ 仅 rphub 模式：原版卡（st）的 WI 由 ST 原生 world-info 通道处理，本插件不介入
-    //   （否则 placement=5 脚本被应用两次）。
-    if (mode !== 'rphub') return;
+    // st 卡 WI 门控：原版扩展在跑 → ST 原生 world-info 通道处理；原版关闭 → 本引擎 legacy 补位。
+    if (mode !== 'rphub' && runtime.nativeRegexRunning()) return;
     const scripts = runtime.getScripts(mode);
     if (scripts.length === 0) return;
 
@@ -155,9 +154,8 @@ export async function onGenerateAfterData(generate_data, dryRun) {
     if (typeof prompt !== 'string' || prompt.length === 0) return;
 
     const mode = await runtime.getMode();
-    // ⚠️ 仅 rphub 模式：原版卡（st）的 prompt 由 ST 原生正则处理，本插件不介入
-    //   （否则 promptOnly 脚本被应用两次）。
-    if (mode !== 'rphub') return;
+    // st 卡 prompt 兜底门控：原版扩展在跑 → ST 原生处理；原版关闭 → 本引擎 legacy 补位。
+    if (mode !== 'rphub' && runtime.nativeRegexRunning()) return;
     const scripts = runtime.getScripts(mode);
     if (scripts.length === 0) return;
 

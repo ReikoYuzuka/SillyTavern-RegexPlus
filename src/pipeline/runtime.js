@@ -22,6 +22,7 @@ import {
     characters,
     this_chid,
     chatElement,
+    extension_settings,
     saveChatConditional,
     messageFormatting,
     substituteParams,
@@ -51,6 +52,18 @@ export const runtime = {
     /** 合并三类脚本。mode=null（判定失败/禁止降级）按 st 行为。 */
     getScripts(mode) {
         return getRegexScripts({ allowedOnly: true, mode: mode === null ? 'st' : mode });
+    },
+
+    /**
+     * 原版 Regex 扩展是否仍在运行（未在 extension_settings.disabledExtensions 里）。
+     * 用于 st 卡显示/prompt 接管门控：
+     *   - 原版在跑 → st 卡让 ST 原生 getRegexedString/messageFormatting 处理（避免双重应用）；
+     *   - 原版关闭（README 要求的安装方式）→ st 卡走本引擎 legacy 补位（原版等价渲染）。
+     * rphub 卡不受此门控（永远走本引擎 RP 渲染）。
+     */
+    nativeRegexRunning() {
+        return Array.isArray(extension_settings?.disabledExtensions)
+            && !extension_settings.disabledExtensions.includes('regex');
     },
 
     /** cleanPrompt 开关读取（C2，默认 true = 对整段 prompt 施加引擎剥离；false = prompt 原样）。 */

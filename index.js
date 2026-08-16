@@ -27,8 +27,8 @@ import { runtime } from './src/pipeline/runtime.js';
 import { mountCompatApi } from './src/pipeline/force-render.js';
 import { rphubCompatPromptInterceptor } from './src/pipeline/prompt.js';
 import { getFormatDetail, clearModeCache } from './src/store/rp-mode.js';
-import { getRegexScripts } from './src/store/scripts.js';
-import { characters, this_chid, extension_settings, saveSettingsDebounced } from './src/st-bridge.js';
+import { getRegexScripts, getCurrentPresetAPI, getCurrentPresetName } from './src/store/scripts.js';
+import { characters, this_chid, extension_settings, saveSettingsDebounced, eventSource, event_types } from './src/st-bridge.js';
 import { initStreamService } from './src/stream/stream-service.js';
 
 /**
@@ -47,18 +47,20 @@ import { initStreamService } from './src/stream/stream-service.js';
  */
 async function ensureRegexWhitelist() {
     try {
-        const ctx = (typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function')
-            ? SillyTavern.getContext()
-            : null;
-        const api = ctx?.mainApi || 'openai';
-        const presetName = ctx?.chatCompletionSettings?.preset_settings_openai;
+        // 与读侧（scripts.js getScriptsByType → getCurrentPresetAPI/getCurrentPresetName）完全同源，
+        // 避免写读不一致（旧实现用 ctx.mainApi + preset_settings_openai，非 openai API 时白名单
+        // 键/名对不上 → 预设被 allowedOnly 过滤 → 预设正则完全不渲染）。
+        const api = getCurrentPresetAPI();
+        const presetName = getCurrentPresetName();
         const avatar = (Array.isArray(characters) && this_chid != null && Number(this_chid) >= 0)
             ? characters[Number(this_chid)]?.avatar
             : null;
         extension_settings.preset_allowed_regex ??= {};
-        extension_settings.preset_allowed_regex[api] ??= [];
-        if (presetName && !extension_settings.preset_allowed_regex[api].includes(presetName)) {
-            extension_settings.preset_allowed_regex[api].push(presetName);
+        if (api && presetName) {
+            extension_settings.preset_allowed_regex[api] ??= [];
+            if (!extension_settings.preset_allowed_regex[api].includes(presetName)) {
+                extension_settings.preset_allowed_regex[api].push(presetName);
+            }
         }
         extension_settings.character_allowed_regex ??= [];
         if (avatar && !extension_settings.character_allowed_regex.includes(avatar)) {
@@ -82,7 +84,20 @@ export async function init() {
 
     // 确保 ST 预设/卡正则白名单（allowedOnly 显示通道前置条件；缺失 → 预设正则全被过滤，
     // 思维链美化等全部不执行）。不阻塞：失败仅影响 ST 原生显示通道，本引擎管道照常。
+    // ⚠️ 必须延迟到 APP_READY：extension init 早于 initPresetManager/getCharacters
+    // （script.js:745 vs 748/757），此时 getCurrentPresetAPI/getCurrentPresetName/characters
+    // 都未就绪 → 会写成空名单。APP_READY 时三者已就绪，再确保一次即为权威值。
     await ensureRegexWhitelist();
+    if (typeof eventSource?.once === 'function' && typeof event_types?.APP_READY === 'string') {
+        eventSource.once(event_types.APP_READY, () => {
+            ensureRegexWhitelist().catch(() => {});
+        });
+    }
+    // 切换角色/预设后白名单需更新（否则新卡/新预设又被 allowedOnly 过滤）。
+    if (typeof eventSource?.on === 'function') {
+        eventSource.on(event_types.CHAT_CHANGED, () => { ensureRegexWhitelist().catch(() => {}); });
+        eventSource.on(event_types.PRESET_CHANGED, () => { ensureRegexWhitelist().catch(() => {}); });
+    }
 
     // 注册 generate_interceptor（F3，审查报告 L3/D7）：manifest.json 的 generate_interceptor 字段
     // 指向本全局函数，ST 在 script.js:4505（coreChat 组装后）逐条调用 —— prompt 通道 per-message

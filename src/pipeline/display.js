@@ -73,10 +73,9 @@ export async function processAndCover(messageId, { source, force = false, isEdit
         return { handled: false, reason: 'already-handled' };
     }
     const mode = await runtime.getMode();
-    // ⚠️ 仅 rphub 模式接管显示：原版卡（st）的显示由 ST 原生 messageFormatting 处理
-    //   （script.js:1809 getRegexedString isMarkdown），本插件不介入 —— 否则引擎处理 +
-    //   ST messageFormatting 二次应用 markdownOnly 脚本（render.js 用 messageFormatting 渲染）。
-    if (mode !== 'rphub') return { handled: false, reason: 'st-mode-not-managed' };
+    // st 卡显示接管门控：原版扩展在跑 → 让 ST 原生 messageFormatting 处理（避免双重应用）；
+    // 原版扩展关闭（README 要求的安装方式）→ 本引擎 legacy 补位（原版等价：Global→Preset→Scoped 串行）。
+    if (mode !== 'rphub' && runtime.nativeRegexRunning()) return { handled: false, reason: 'st-mode-native-regex' };
     const scripts = runtime.getScripts(mode);
     const runArgs = {
         ...derivePlacement(msg),
@@ -141,12 +140,10 @@ export async function coverMessage(messageId, { forceApply = false, editRecovery
         }
         return;
     }
-    // ⚠️ 仅 rphub 模式接管显示：原版卡（st）的显示由 ST 原生 messageFormatting 渲染
-    //   （script.js:1809 getRegexedString isMarkdown），本插件不覆盖 DOM —— 否则引擎处理 +
-    //   ST messageFormatting 二次应用 markdownOnly 脚本（显示双重应用，render.js 用
-    //   messageFormatting 渲染引擎结果）。
+    // st 卡显示接管门控：原版扩展在跑 → ST 原生渲染（不覆盖 DOM，避免双重应用）；
+    // 原版扩展关闭 → 本引擎 legacy 补位覆盖 DOM 展示引擎结果（原版等价）。
     const mode = await runtime.getMode();
-    if (mode !== 'rphub') return;
+    if (mode !== 'rphub' && runtime.nativeRegexRunning()) return;
     const $mesText = runtime.chatElement.find(`.mes[mesid="${messageId}"] .mes_text`);
     if (!$mesText.length) return;
     if (isEditingDom($mesText)) return; // 编辑态（.mes_text 内为 textarea）跳过
