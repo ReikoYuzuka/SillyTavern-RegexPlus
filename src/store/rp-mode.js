@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * rp-mode.js —— 模式判定（rphub / st）+ 后端 cardId 匹配 + 缓存 + 降级。
  *

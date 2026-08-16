@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * pipeline/force-render.js —— 强制重新渲染 + 聊天打开自动覆盖（全局入口 window.__rphubCompat__）。
  *

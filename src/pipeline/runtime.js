@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * pipeline/runtime.js —— 管道共享运行时（唯一导入 st-bridge 的管道模块）。
  *

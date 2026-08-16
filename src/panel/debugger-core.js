@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * panel/debugger-core.js —— 调试器纯逻辑核心（可 node 离线测试）。
  *

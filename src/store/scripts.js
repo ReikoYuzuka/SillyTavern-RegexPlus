@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * scripts.js —— 三类脚本存储读写（ST 全局包装）+ 合并。
  *

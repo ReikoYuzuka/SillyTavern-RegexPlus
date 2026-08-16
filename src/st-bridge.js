@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * st-bridge.js —— 集中导入 SillyTavern 全局模块，供管道 / 数据层使用。
  *

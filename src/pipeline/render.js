@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * pipeline/render.js —— 显示写回（酒馆助手优先，ST 原生回退）。
  *

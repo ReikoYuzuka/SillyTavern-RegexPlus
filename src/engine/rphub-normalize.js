@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * rphub 正则修饰符归一 —— 逐字复刻 RP-Hub core-utils.js:269-279 normalizeRegexModifiers。
  *

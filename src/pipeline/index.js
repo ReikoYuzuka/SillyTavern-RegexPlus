@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * pipeline/index.js —— 管道协调器：init/stop + 事件挂载。
  *

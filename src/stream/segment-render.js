@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * stream/segment-render.js —— 流式段级渲染（排除规则预处理 + 引擎段级调用 + 内存渲染表）。
  *

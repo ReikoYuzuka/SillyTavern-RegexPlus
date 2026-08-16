@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * stream/segment-detector.js —— 流式段状态机（纯函数，node 可测）。
  *

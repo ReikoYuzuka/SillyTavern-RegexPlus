@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * RP-Hub 兼容插件 · 自研正则引擎 —— 扩展入口（第二部：事件管道 + 数据层 + 正则面板）
  *

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * pipeline/prompt.js —— prompt 通道（生成期逐条处理，F3 修复）。
  *

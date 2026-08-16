@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * engine/trigger-bridge.js —— triggerSlash 语义分发桥（供显示通道围栏化注入）。
  *

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * 保护替换 —— 逐字复刻 RP-Hub core-utils.js 的 transformUnprotectedText / protectedContentPattern。
  *

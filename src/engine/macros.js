@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * 宏替换 —— ST 语义的最小默认实现（供纯函数引擎使用）。
  *

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * ui.js —— 面板 UI 层（jQuery 复刻原版正则扩展面板）。
  *

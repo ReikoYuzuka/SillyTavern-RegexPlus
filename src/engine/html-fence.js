@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * engine/html-fence.js —— HTML 围栏化（显示通道渲染层动作）。
  *

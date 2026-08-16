@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * store/settings.js —— 插件自有设置（extension_settings 顶层键，与 rp_hub_* 风格一致）。
  *

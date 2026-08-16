@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * pipeline/pure.js —— 管道纯函数（可 node 离线测试，不依赖 DOM / ST 全局）。
  *

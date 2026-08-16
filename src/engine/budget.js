@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * 超时预算 —— 防灾难性回溯（性能防线最高优先级）。
  *

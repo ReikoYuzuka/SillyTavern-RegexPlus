@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * rphub 语义解释器 —— 对照 RP-Hub app.js processRegex（2913-2991）。
  *

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * scripts-core.js —— 三类脚本合并的纯函数核心（可 node 离线测试）。
  *

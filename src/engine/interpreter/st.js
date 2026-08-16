@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * st 语义解释器 —— 逐字复刻原版 ST regex 扩展（engine.js）的过滤与替换机制。
  *

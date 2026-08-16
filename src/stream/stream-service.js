@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * stream/stream-service.js —— 流式实时渲染服务（事件接线 + 段渲染 + DOM 呈现 + 正式链路拼合）。
  *

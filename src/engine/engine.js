@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ReikoYuzuka
+
 /**
  * 引擎核心 —— run()：双模式（rphub/st）调度、双通道分流、脚本合并、超时预算。
  *
