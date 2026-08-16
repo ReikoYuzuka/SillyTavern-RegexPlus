@@ -1,12 +1,16 @@
-# RegexPlus
+# SillyTavern-RegexPlus
 
-SillyTavern 正则引擎插件（原 rp-hub-compat 前端）：RP 卡正则引擎 + 正则面板 + 显示管道。
+SillyTavern 正则引擎插件：RP-Hub 角色卡的正则解释器与渲染管道，附带正则面板（三分类下拉 + 编辑器 + 调试器）。
 
-## 安装
+**安装**：把本目录放进 `SillyTavern/public/scripts/extensions/third-party/`（目录名保持 `rp-hub-compat`），扩展设置里启用。
 
-把本目录放进 \SillyTavern/public/scripts/extensions/third-party/\ 下（目录名保持 \p-hub-compat\），
-在扩展设置里启用即可。
+## 新增功能
 
-## 协议
-
-[AGPL-3.0](./LICENSE)，与 SillyTavern 本体一致。
+- **双语义解释器**：预设/全局脚本按酒馆标准（st）执行，RP 卡内嵌 scoped 脚本按 RP-Hub 语义执行（保护替换 / userOnly / 双 false 仅显示）。
+- **1→2→1 渲染管线**：预设第一遍生成界面 → 界面段藏走 → 卡内嵌美化跑纯正文 → 预设第二遍 → 拼回，界面与美化正文并存。
+- **界面段隔离**：HTML 围栏 / 完整 HTML 文档 / script 块在美化阶段对正则隐形，正文 `^` 锚定不失效。
+- **空白段守卫**：纯空白段不交给「整段匹配型」美化正则，防止包出空卡片。
+- **排除第 0 楼**：开场白带全文负前瞻的沉浸式容器默认跳过，普通 scoped 照常执行。
+- **保护替换**：正则美化产出代码块后，后续正则不会破坏代码块。
+- **ReDoS 预检 + 超时预算**：病态正则执行前被拦截，重正则预算内掐断。
+- **triggerSlash 语义分发桥**：纯文本 `/` 开头按钮走「发消息 + 生成」，不再报 Unknown command。
