@@ -1,0 +1,50 @@
+<div class="regex-diagnose-container">
+    <!-- 测试文本输入 -->
+    <div class="regex-diagnose-tester">
+        <h3>
+            <i class="fa-solid fa-stethoscope"></i>
+            <span>正则诊断</span>
+        </h3>
+        <small class="regex-diagnose-hint">
+            逐脚本显示「编译 / ReDoS 预检 / 执行」三层状态。被预检拦截（嵌套量词形态）的脚本
+            可点「绕过」放行（键 = 脚本 id 或脚本名，写入 rp_hub_precheck_bypass）；总开关
+            关闭后所有脚本跳过预检直接执行（承担病理正则卡死风险）。测试文本缺省回填当前
+            聊天最后一条 AI 回复；修改文本后自动重新分析。
+        </small>
+        <label for="regex_diagnose_input">测试文本</label>
+        <textarea id="regex_diagnose_input" class="text_pole autoSetHeight" rows="5" spellcheck="false"></textarea>
+        <div class="regex-diagnose-actions">
+            <button id="regex_diagnose_run" class="menu_button menu_button_icon interactable" title="重新分析全部规则">
+                <i class="fa-solid fa-play"></i>
+                <span>分析</span>
+            </button>
+            <button id="regex_diagnose_reset" class="menu_button menu_button_icon interactable" title="恢复为当前聊天最后一条 AI 回复">
+                <i class="fa-solid fa-rotate-left"></i>
+                <span>回填最后回复</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- 规则状态列表 -->
+    <div class="regex-diagnose-rules-list">
+        <h3>
+            <i class="fa-solid fa-list-check"></i>
+            <span>规则状态</span>
+        </h3>
+        <div id="regex_diagnose_rules">
+            <!-- Rules will be populated here by JavaScript -->
+        </div>
+    </div>
+</div>
+
+<!-- 单条规则状态模板 -->
+<template id="regex_diagnose_rule_template">
+    <div class="regex-diagnose-rule">
+        <div class="regex-diagnose-rule-header">
+            <strong class="regex-diagnose-rule-name"></strong>
+            <code class="regex-diagnose-rule-regex"></code>
+            <span class="regex-diagnose-badges"></span>
+        </div>
+        <div class="regex-diagnose-rule-detail"></div>
+    </div>
+</template>

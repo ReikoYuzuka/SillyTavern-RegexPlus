@@ -1,0 +1,15 @@
+{
+    "display_name": "Regex plus",
+    "loading_order": 1,
+    "requires": [],
+    "optional": [],
+    "generate_interceptor": "rphubCompatPromptInterceptor",
+    "js": "index.js",
+    "css": "style.css",
+    "author": "RP-Hub 兼容插件",
+    "version": "0.3.0",
+    "homePage": "",
+    "hooks": {
+        "activate": "init"
+    }
+}

@@ -1,0 +1,457 @@
+<div class="regex_settings" id="rph_regex_panel">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b data-i18n="ext_regex_title">
+                Regex
+            </b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <div class="flex-container">
+                <div id="open_regex_editor" class="menu_button menu_button_icon" data-i18n="[title]ext_regex_new_global_script_desc" title="New global regex script">
+                    <i class="fa-solid fa-pen-to-square"></i>
+                    <small data-i18n="ext_regex_new_global_script">+ Global</small>
+                </div>
+                <div id="open_preset_editor" class="menu_button menu_button_icon" data-i18n="[title]ext_regex_new_preset_script_desc" title="New preset regex script">
+                    <i class="fa-solid fa-sliders"></i>
+                    <small data-i18n="ext_regex_new_preset_script">+ Preset</small>
+                </div>
+                <div id="open_scoped_editor" class="menu_button menu_button_icon" data-i18n="[title]ext_regex_new_scoped_script_desc" title="New scoped regex script">
+                    <i class="fa-solid fa-address-card"></i>
+                    <small data-i18n="ext_regex_new_scoped_script">+ Scoped</small>
+                </div>
+                <div id="import_regex" class="menu_button menu_button_icon">
+                    <i class="fa-solid fa-file-import"></i>
+                    <small data-i18n="ext_regex_import_script">Import</small>
+                </div>
+                <input type="file" id="import_regex_file" hidden accept="*.json" multiple />
+                <label for="regex_bulk_edit" class="menu_button menu_button_icon">
+                    <input id="regex_bulk_edit" type="checkbox" class="displayNone" />
+                    <i class="fa-solid fa-edit"></i>
+                    <small data-i18n="ext_regex_bulk_edit">Bulk Edit</small>
+                </label>
+                <div id="open_regex_debugger" class="menu_button menu_button_icon" data-i18n="[title]ext_regex_debugger_desc" title="Advanced Regex Debugger">
+                    <i class="fa-solid fa-bug-slash"></i>
+                    <small data-i18n="ext_regex_debugger">Debugger</small>
+                </div>
+                <div id="open_plugin_settings" class="menu_button menu_button_icon" title="插件设置（执行顺序/存储/自动隔离/预算/预检/保护等）">
+                    <i class="fa-solid fa-gear"></i>
+                    <small>设置</small>
+                </div>
+            </div>
+            <hr class="regex_bulk_operations_hr" />
+            <div class="regex_bulk_operations flex-container">
+                <div id="bulk_select_all_toggle" class="menu_button menu_button_icon" title="Toggle Select All">
+                    <i class="fa-solid fa-check-double"></i>
+                </div>
+                <div id="bulk_enable_regex" class="menu_button menu_button_icon">
+                    <i class="fa-solid fa-toggle-on"></i>
+                    <small data-i18n="Enable">Enable</small>
+                </div>
+                <div id="bulk_disable_regex" class="menu_button menu_button_icon">
+                    <i class="fa-solid fa-toggle-off"></i>
+                    <small data-i18n="Disable">Disable</small>
+                </div>
+                <div id="bulk_regex_move_to_global" class="menu_button menu_button_icon" hidden>
+                    <i class="fa-solid fa-globe"></i>
+                    <small data-i18n="ext_regex_move_to_global">Move to global scripts</small>
+                </div>
+                <div id="bulk_regex_move_to_preset" class="menu_button menu_button_icon" hidden>
+                    <i class="fa-solid fa-sliders"></i>
+                    <small data-i18n="ext_regex_move_to_preset">Move to preset scripts</small>
+                </div>
+                <div id="bulk_regex_move_to_scoped" class="menu_button menu_button_icon" hidden>
+                    <i class="fa-solid fa-address-card"></i>
+                    <small data-i18n="ext_regex_move_to_scoped">Move to scoped scripts</small>
+                </div>
+                <div id="bulk_export_regex" class="menu_button menu_button_icon">
+                    <i class="fa-solid fa-file-export"></i>
+                    <small data-i18n="Export">Export</small>
+                </div>
+                <div id="bulk_delete_regex" class="menu_button menu_button_icon">
+                    <i class="fa-solid fa-trash"></i>
+                    <small data-i18n="Delete">Delete</small>
+                </div>
+            </div>
+            <hr />
+            <div id="regex_presets_block">
+                <div class="flex-container alignItemsBaseline">
+                    <strong class="flex1" data-i18n="ext_regex_presets">Regex Presets</strong>
+                </div>
+                <small data-i18n="ext_regex_presets_desc">
+                    Save and switch between groups of enabled regex scripts.
+                </small>
+                <div class="flex-container marginTop5">
+                    <select id="regex_presets" class="text_pole flex1"></select>
+                    <div id="regex_preset_create" class="menu_button fa-solid fa-file-circle-plus" data-i18n="[title]ext_regex_preset_create" title="Create a new regex preset"></div>
+                    <div id="regex_preset_update" class="menu_button fa-solid fa-save" data-i18n="[title]ext_regex_preset_update" title="Update existing regex preset"></div>
+                    <div id="regex_preset_apply" class="menu_button fa-solid fa-recycle" data-i18n="[title]ext_regex_preset_apply" title="Re-apply current preset"></div>
+                    <div id="regex_preset_delete" class="menu_button fa-solid fa-trash" data-i18n="[title]ext_regex_preset_delete" title="Delete current preset"></div>
+                </div>
+            </div>
+            <hr />
+            <div id="global_scripts_block">
+                <div>
+                    <strong data-i18n="ext_regex_global_scripts">Global Scripts</strong>
+                </div>
+                <small data-i18n="ext_regex_global_scripts_desc">
+                    Available for all characters. Saved to local settings.
+                </small>
+                <div id="saved_regex_scripts" no-scripts-text="No scripts found" data-i18n="[no-scripts-text]No scripts found" class="flex-container regex-script-container flexFlowColumn"></div>
+            </div>
+            <hr />
+            <div id="preset_scripts_block">
+                <div class="flex-container alignItemsBaseline">
+                    <strong class="flex1" data-i18n="ext_regex_preset_scripts">Preset Scripts</strong>
+                    <label id="toggle_preset_regex" class="checkbox flex-container" for="regex_preset_toggle">
+                        <input type="checkbox" id="regex_preset_toggle" class="enable_scoped" />
+                        <span class="regex-toggle-on fa-solid fa-toggle-on fa-lg" data-i18n="[title]ext_regex_disallow_preset" title="Disallow using preset regex"></span>
+                        <span class="regex-toggle-off fa-solid fa-toggle-off fa-lg" data-i18n="[title]ext_regex_allow_preset" title="Allow using preset regex"></span>
+                    </label>
+                </div>
+                <small data-i18n="ext_regex_preset_scripts_desc">
+                    Only available for this preset. Saved to the preset data.
+                </small>
+                <div id="saved_preset_scripts" no-scripts-text="No scripts found" data-i18n="[no-scripts-text]No scripts found" class="flex-container regex-script-container flexFlowColumn"></div>
+            </div>
+            <hr />
+            <div id="scoped_scripts_block">
+                <div class="flex-container alignItemsBaseline">
+                    <strong class="flex1" data-i18n="ext_regex_scoped_scripts">Scoped Scripts</strong>
+                    <label id="toggle_scoped_regex" class="checkbox flex-container" for="regex_scoped_toggle">
+                        <input type="checkbox" id="regex_scoped_toggle" class="enable_scoped" />
+                        <span class="regex-toggle-on fa-solid fa-toggle-on fa-lg" data-i18n="[title]ext_regex_disallow_scoped" title="Disallow using scoped regex"></span>
+                        <span class="regex-toggle-off fa-solid fa-toggle-off fa-lg" data-i18n="[title]ext_regex_allow_scoped" title="Allow using scoped regex"></span>
+                    </label>
+                </div>
+                <small data-i18n="ext_regex_scoped_scripts_desc">
+                    Only available for this character. Saved to the card data.
+                </small>
+                <div id="saved_scoped_scripts" no-scripts-text="No scripts found" data-i18n="[no-scripts-text]No scripts found" class="flex-container regex-script-container flexFlowColumn"></div>
+            </div>
+            <hr />
+            <div id="plugin_settings_section" class="displayNone">
+            <div class="flex-container alignItemsBaseline marginTop5">
+                <strong style="margin-right:10px">执行顺序来源</strong>
+                <div class="flex-container alignItemsBaseline">
+                    <label class="checkbox flex-container" for="regex_order_source_spreset">
+                        <input type="radio" name="regex_order_source" id="regex_order_source_spreset" value="spreset" />
+                        <span>SPreset（默认）</span>
+                    </label>
+                    <label class="checkbox flex-container" for="regex_order_source_st">
+                        <input type="radio" name="regex_order_source" id="regex_order_source_st" value="st" />
+                        <span>原版顺序</span>
+                    </label>
+                </div>
+            </div>
+            <small style="display:block;text-align:left;opacity:.75;margin:2px 0">预设 / 全局 / 角色三类正则的执行顺序。SPreset 跟随外部脚本顺序（通常 预设→全局→角色）；原版顺序 = Global→Preset→Scoped。</small>
+            <hr />
+            <div id="plugin_settings_block">
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <strong style="margin-right:10px">降级目标</strong>
+                    <select id="regex_degrade_target" class="text_pole">
+                        <option value="st">st（默认）</option>
+                        <option value="rphub">rphub</option>
+                        <option value="none">none（禁止降级）</option>
+                    </select>
+                </div>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <strong style="margin-right:10px">存储位置</strong>
+                    <div class="flex-container alignItemsBaseline">
+                        <label class="checkbox flex-container" for="regex_extras_storage_local">
+                            <input type="radio" name="regex_extras_storage" id="regex_extras_storage_local" value="local" />
+                            <span>localStorage（默认）</span>
+                        </label>
+                        <label class="checkbox flex-container" for="regex_extras_storage_settings">
+                            <input type="radio" name="regex_extras_storage" id="regex_extras_storage_settings" value="settings" />
+                            <span>extension_settings</span>
+                        </label>
+                    </div>
+                </div>
+                <small style="display:block;text-align:left;opacity:.75;margin:2px 0">脚本自定义字段（作用域/预处理等）存储位置。localStorage 关闭重开不丢；extension_settings 随 ST settings.json。切换自动迁移。</small>
+                <div class="rp_stream_mode1">
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <strong style="margin-right:10px">渲染模式</strong>
+                    <select id="regex_render_mode" class="text_pole" style="max-width: 220px" title="渲染模式：1→2→1 两阶段管线（默认）/ 旧模式顺序混跑">
+                        <option value="two_pass_121">1→2→1 两阶段管线（默认）</option>
+                        <option value="legacy">旧模式（顺序混跑）</option>
+                    </select>
+                </div>
+                <small style="display:block;text-align:left;opacity:.75;margin:2px 0">1→2→1：预设第一遍生成界面（狐策/表裏/NC-MAP）→ 界面段藏走 → 卡内嵌（scoped）+ 全局在剩余纯正文上美化（^ 锚定正常、界面不可见）→ 预设第二遍 → 界面按原位拼回。界面与美化正文并存，各管各的。旧模式 = 现状顺序混跑（自动隔离脚本区生效）。切到旧模式自动重算显示。</small>
+                </div><!-- /rp_stream_mode1 渲染模式 -->
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <strong style="margin-right:10px">流式实时渲染</strong>
+                    <label class="checkbox flex-container" for="regex_stream_render_toggle">
+                        <input type="checkbox" id="regex_stream_render_toggle" class="enable_scoped" />
+                        <span class="regex-toggle-on fa-solid fa-toggle-on fa-lg" title="开启流式实时渲染（AI 流式输出期间按匹配配置实时渲染段内容）"></span>
+                        <span class="regex-toggle-off fa-solid fa-toggle-off fa-lg" title="关闭流式实时渲染（默认，完整文本获取后一次性渲染）"></span>
+                    </label>
+                </div>
+                <div class="rp_stream_mode2">
+                <small style="display:block;text-align:left;opacity:.75;margin:2px 0">默认关闭（模式一·完整渲染，零影响）。开启后流式期间实时检查下方「段匹配配置」：匹配到起始标签/正则 → 段内容实时交引擎渲染（节流持续更新 + 闭合定格）；匹配到闭合 → 交回酒馆原生通道；流式结束后正式链路渲染整条消息时，正文段区间用流式定格结果拼合（无跳变、不二次渲染正文段）。</small>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <strong style="margin-right:10px">段匹配配置</strong>
+                    <div id="regex_stream_advanced_toggle" class="menu_button menu_button_icon" title="切换普通/高级模式" tabindex="0" role="button">
+                        <i class="fa-solid fa-arrows-rotate"></i>
+                        <small>高级模式</small>
+                    </div>
+                </div>
+                <small style="display:block;text-align:left;opacity:.75;margin:2px 0">标准模式（默认）：输入「标签头 + 标签尾」（如 &lt;content&gt; + &lt;/content&gt;），可添加多组（多段依次接管，如思维链 + 正文）。⚠️ 思维链段（&lt;think_fox~&gt;…&lt;/think_fox~&gt;）默认由酒馆原生通道渲染（表裏正则 → 代码块），**建议不要配入流式匹配**，避免与原生渲染重叠；流式匹配只配正文段即可。高级模式：用自定义正则表达式匹配段（取最左匹配，闭合即接管结束，一条或多条，如 &lt;think_?fox~?&gt;[\\s\\S]*?&lt;/think_?fox~?&gt;）。</small>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <div id="regex_stream_rules_container" class="flex-container flexFlowColumn flex1">
+                        <div id="regex_stream_add_rule" class="menu_button menu_button_icon" title="添加一组标签对（标准模式）">
+                            <i class="fa-solid fa-plus"></i><small>添加标签对</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <div id="regex_stream_rx_container" class="flex-container flexFlowColumn flex1">
+                        <div id="regex_stream_add_rx" class="menu_button menu_button_icon" title="添加一条段正则（高级模式）">
+                            <i class="fa-solid fa-plus"></i><small>添加段正则</small>
+                        </div>
+                    </div>
+                </div>
+                <!-- 标准模式标签对行模板（jQuery 克隆用，displayNone 隐藏） -->
+                <div id="regex_stream_rule_template" class="displayNone flex-container alignItemsBaseline marginTop5" style="gap:4px">
+                    <input name="rp_stream_rule_start" class="text_pole textarea_compact flex1" type="text" placeholder="标签头，如 &lt;think_fox~&gt;" />
+                    <input name="rp_stream_rule_end" class="text_pole textarea_compact flex1" type="text" placeholder="标签尾，如 &lt;/think_fox~&gt;" />
+                    <div class="rp_stream_rule_remove menu_button menu_button_icon interactable" title="删除这组标签对" tabindex="0" role="button">
+                        <i class="fa-solid fa-trash"></i>
+                    </div>
+                </div>
+                <!-- 高级模式段正则行模板（jQuery 克隆用，displayNone 隐藏） -->
+                <div id="regex_stream_rx_template" class="displayNone flex-container alignItemsBaseline marginTop5" style="gap:4px">
+                    <input name="rp_stream_rx_input" class="text_pole textarea_compact flex1" type="text" placeholder="段匹配正则，如 &lt;think_?fox~?&gt;[\\s\\S]*?&lt;/think_?fox~?&gt;" />
+                    <div class="rp_stream_rx_remove menu_button menu_button_icon interactable" title="删除这条段正则" tabindex="0" role="button">
+                        <i class="fa-solid fa-trash"></i>
+                    </div>
+                </div>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <strong style="margin-right:10px">排除规则（预处理）</strong>
+                </div>
+                <small style="display:block;text-align:left;opacity:.75;margin:2px 0">段级引擎渲染前逐条应用（顺序应用、并集语义）：藏走 = 段对引擎隐身、原样保留；删除 = 从输出中去掉；替换 = 替换为指定文本（留空 = 删除）。</small>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <div id="regex_stream_excludes_container" class="flex-container flexFlowColumn flex1">
+                        <div id="regex_stream_add_exclude" class="menu_button menu_button_icon" title="添加一条排除规则">
+                            <i class="fa-solid fa-plus"></i><small>添加排除规则</small>
+                        </div>
+                    </div>
+                </div>
+                <!-- 排除规则行模板（jQuery 克隆用，displayNone 隐藏）。主行（正则 + 动作下拉 + 替换输入 + 删除）
+                     动作 = 替换 时替换输入可见；藏走/删除 时隐藏。 -->
+                <div id="regex_stream_exclude_template" class="displayNone flex-container alignItemsBaseline marginTop5" style="gap:4px">
+                    <input name="rp_stream_exclude_pattern" class="text_pole textarea_compact flex1" type="text" placeholder="排除正则，如 &lt;ui_template_updates&gt;[\\s\\S]*?&lt;/ui_template_updates&gt;" />
+                    <select name="rp_stream_exclude_action" class="text_pole textarea_compact" style="max-width: 110px" title="动作：藏走（段保留对引擎隐身）/ 删除（去掉段）/ 替换（替换为下方文本）">
+                        <option value="hide">藏走</option>
+                        <option value="delete">删除</option>
+                        <option value="replace">替换</option>
+                    </select>
+                    <input name="rp_stream_exclude_replace" class="text_pole textarea_compact flex1" type="text" placeholder="替换为（动作=替换时生效；留空 = 删除）" />
+                    <div class="rp_stream_exclude_remove menu_button menu_button_icon interactable" title="删除这条排除规则" tabindex="0" role="button">
+                        <i class="fa-solid fa-trash"></i>
+                    </div>
+                </div>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <div id="regex_stream_reset" class="menu_button menu_button_icon" title="恢复默认流式配置（开关关、标准模式、空匹配、无排除）">
+                        <i class="fa-solid fa-rotate-left"></i><small>恢复默认</small>
+                    </div>
+                </div>
+                </div><!-- /rp_stream_mode2 流式配置 -->
+                <div class="rp_stream_mode1">
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <strong style="margin-right:10px">清洗规则</strong>
+                </div>
+                <small style="display:block;text-align:left;opacity:.75;margin:2px 0">1→2→1 模式阶段②：预设第一遍跑完后、交给卡内嵌美化前，把这些正则匹配到的代码块藏走（对卡内嵌美化正则隐形）。默认 = ```html 围栏 + 完整 HTML 文档 + script + 裸围栏 + content 标签。每条可配「替换为」（有值 = 该条匹配的段替换为它；留空 = 删除该条匹配的段；不配 = 恢复原位）。清空 = 不藏任何（清洗跳过）。</small>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <div id="regex_clean_rules" class="flex-container flexFlowColumn flex1">
+                        <div id="regex_clean_add" class="menu_button menu_button_icon" title="添加一条清洗规则">
+                            <i class="fa-solid fa-plus"></i><small>添加</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <div id="regex_clean_reset" class="menu_button menu_button_icon" title="恢复默认清洗规则">
+                        <i class="fa-solid fa-rotate-left"></i><small>恢复默认</small>
+                    </div>
+                </div>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <strong style="margin-right:10px">第二次预设（阶段③）</strong>
+                    <label class="checkbox flex-container" for="regex_second_pass_enabled_toggle">
+                        <input type="checkbox" id="regex_second_pass_enabled_toggle" class="enable_scoped" />
+                        <span class="regex-toggle-on fa-solid fa-toggle-on fa-lg" title="开启第二次预设（预设正则第二遍再跑一遍）"></span>
+                        <span class="regex-toggle-off fa-solid fa-toggle-off fa-lg" title="关闭第二次预设（默认，预设只跑一次阶段①）"></span>
+                    </label>
+                </div>
+                <small style="display:block;text-align:left;opacity:.75;margin:2px 0">阶段③（预设第二遍）总开关，默认关闭：关闭 = 预设正则只跑一次（阶段①），减小前端压力；开启 = 预设正则第二遍再跑一遍（受下方过滤规则 / 「第二次不执行」约束）。</small>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <strong style="margin-right:10px">空白段守卫</strong>
+                    <label class="checkbox flex-container" for="regex_skip_blank_segments_toggle">
+                        <input type="checkbox" id="regex_skip_blank_segments_toggle" class="enable_scoped" />
+                        <span class="regex-toggle-on fa-solid fa-toggle-on fa-lg" title="开启空白段守卫（纯空白段不交给美化脚本）"></span>
+                        <span class="regex-toggle-off fa-solid fa-toggle-off fa-lg" title="关闭空白段守卫（默认，空白段照常交给脚本）"></span>
+                    </label>
+                </div>
+                <small style="display:block;text-align:left;opacity:.75;margin:2px 0">空白段守卫，默认关闭：开启 = 阶段②/③ 执行脚本时，纯空白段（整段无可见字符）跳过不执行——防「整段匹配型」美化正则（如卡内嵌 ^([\s\S]+)$ 无 \S 守卫）把藏走界面段后残留的孤立换行包成空卡片。默认关闭 = 空卡问题由「清洗规则替换为空 = 删除段」在配置层解决，行为同旧版。</small>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <strong style="margin-right:10px">第二次预设过滤</strong>
+                    <select id="regex_second_pass_mode" class="text_pole" style="max-width: 200px" title="第二次预设过滤模式">
+                        <option value="all">全部（默认）</option>
+                        <option value="custom">自定义</option>
+                    </select>
+                </div>
+                <small style="display:block;text-align:left;opacity:.75;margin:2px 0">阶段③开启时生效：决定哪些预设正则第二遍再跑一遍。默认「全部」= 全部预设跑一遍。自定义 = 按位置 / 名称过滤（维度之间 OR 任一命中即算匹配；包含 = 匹配到的进第二遍，排除 = 匹配到的不进）。disabled 的脚本始终不参与第二遍。</small>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <div id="regex_second_pass_filter" class="flex-container flexFlowColumn flex1" style="gap:4px">
+                        <div class="flex-container alignItemsBaseline" style="gap:4px">
+                            <span style="font-size:smaller;white-space:nowrap">位置：</span>
+                            <input id="regex_second_pass_positions" class="text_pole textarea_compact flex1" type="text" placeholder="如 1（第2个）、1,3、1~（第2到末尾）、1~4（第2到第5）" title="按排序位置（索引 0 开始）。1=第2个；1,3=第2和4；1~=第2到末尾；1~4=第2到第5" />
+                        </div>
+                        <div class="flex-container alignItemsBaseline" style="gap:4px">
+                            <span style="font-size:smaller;white-space:nowrap">名称包含：</span>
+                            <input id="regex_second_pass_name_simple" class="text_pole textarea_compact flex1" type="text" placeholder="脚本名子串（大小写不敏感）" />
+                        </div>
+                        <div class="flex-container alignItemsBaseline" style="gap:4px">
+                            <span style="font-size:smaller;white-space:nowrap">名称正则：</span>
+                            <input id="regex_second_pass_name_regex" class="text_pole textarea_compact flex1" type="text" placeholder="脚本名匹配的自定义正则（可选）" />
+                        </div>
+                        <div class="flex-container alignItemsBaseline" style="gap:4px">
+                            <label class="checkbox flex-container" title="排除（勾选）：匹配到的预设不进入第二遍；不勾 = 包含（进入第二遍）">
+                                <input type="checkbox" id="regex_second_pass_mode2" />
+                                <span>排除</span>
+                            </label>
+                            <div id="regex_second_pass_reset" class="menu_button menu_button_icon" title="恢复默认（全部跑一遍）">
+                                <i class="fa-solid fa-rotate-left"></i><small>恢复默认</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- 清洗规则行模板（jQuery 克隆用，displayNone 隐藏）。主行（正则 + 替换按钮 + 删除）
+                     后紧跟一条替换输入行（默认隐藏；替换按钮展开/收起）——与预处理高级模式替换按钮同款。 -->
+                <div id="regex_clean_rule_template" class="displayNone flex-container alignItemsBaseline marginTop5" style="gap:4px">
+                    <input name="rp_clean_rule" class="text_pole textarea_compact flex1" type="text" placeholder="正则表达式，如 &lt;div class='panel'&gt;[\\s\\S]*?&lt;/div&gt;" />
+                    <div class="rp_clean_rule_replace_btn menu_button menu_button_icon interactable" title="展开/收起「替换为」（有值 = 该条匹配的段替换为它；不填 = 删除该条匹配的段）" tabindex="0" role="button">
+                        <i class="fa-solid fa-arrows-rotate"></i>
+                        <small>替换</small>
+                    </div>
+                    <div class="rp_clean_rule_remove menu_button menu_button_icon interactable" title="删除这条规则" tabindex="0" role="button">
+                        <i class="fa-solid fa-trash"></i>
+                    </div>
+                </div>
+                <div id="regex_clean_rule_replace_template" class="displayNone flex-container alignItemsBaseline marginTop5" style="gap:4px">
+                    <input name="rp_clean_rule_replace" class="text_pole textarea_compact flex1" type="text" placeholder="替换为（留空 = 删除该条匹配的段）" />
+                </div>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <strong style="margin-right:10px">自动隔离脚本区</strong>
+                    <label class="checkbox flex-container" for="regex_auto_protect_script_toggle">
+                        <input type="checkbox" id="regex_auto_protect_script_toggle" class="enable_scoped" />
+                        <span class="regex-toggle-on fa-solid fa-toggle-on fa-lg" title="开启自动隔离脚本区（默认）"></span>
+                        <span class="regex-toggle-off fa-solid fa-toggle-off fa-lg" title="关闭自动隔离脚本区（正则全消息跑）"></span>
+                    </label>
+                </div>
+                <small style="display:block;text-align:left;opacity:.75;margin:2px 0">仅「旧模式」生效：显示美化正则（rphub 显示通道 / st 仅显示）未配「预处理」时，引擎自动把 &lt;script&gt;…&lt;/script&gt; 占位符掩蔽——正文连续、脚本区隐形（狐策点不动根源修复）。1→2→1 模式下由界面段藏走天然隔离，此开关不单独作用。</small>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <strong style="margin-right:10px">排除第0楼（开场白）</strong>
+                    <label class="checkbox flex-container" for="regex_exclude_first_message_toggle">
+                        <input type="checkbox" id="regex_exclude_first_message_toggle" class="enable_scoped" />
+                        <span class="regex-toggle-on fa-solid fa-toggle-on fa-lg" title="开启：第0楼 scoped 正则按档位处理（默认开启）"></span>
+                        <span class="regex-toggle-off fa-solid fa-toggle-off fa-lg" title="关闭：第0楼照常执行局部正则"></span>
+                    </label>
+                </div>
+                <div class="flex-container alignItemsBaseline marginTop5" style="margin-left:20px">
+                    <strong style="margin-right:10px;opacity:.8">只跳过全文负前瞻</strong>
+                    <label class="checkbox flex-container" for="regex_exclude_first_fulltext_toggle">
+                        <input type="checkbox" id="regex_exclude_first_fulltext_toggle" class="enable_scoped" />
+                        <span class="regex-toggle-on fa-solid fa-toggle-on fa-lg" title="精细（默认）：只跳过带全文负前瞻 (?![\s\S]* 的局部正则"></span>
+                        <span class="regex-toggle-off fa-solid fa-toggle-off fa-lg" title="暴力：跳过全部局部正则（状态面板会消失，慎用）"></span>
+                    </label>
+                </div>
+                <small style="display:block;text-align:left;opacity:.75;margin:2px 0">默认开启。第 0 楼（开场白 = 首条非系统消息）的局部正则按档位处理：精细（默认，只跳过带全文负前瞻 (?![\s\S]* 的局部正则，如沉浸式容器会被尾部预置 UI 面板误伤；隐藏状态 / 状态面板生成照常）；暴力（跳过全部局部正则，与妹生活等卡状态面板会消失，慎用）。预设/全局不受影响。</small>
+                </div><!-- /rp_stream_mode1 渲染模式一管线配置（遍次/清洗/第二遍/空白段/自动隔离） -->
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <strong style="margin-right:10px">超时预算（ms）</strong>
+                    <input type="number" id="regex_budget_ms" min="1" max="5000" step="1"
+                           class="text_pole" style="max-width: 120px" value="50" title="超时预算（ms，1-5000）" />
+                </div>
+                <small style="display:block;text-align:left;opacity:.75;margin:2px 0">每条正则最大执行时间，超时跳过（记录 timedOut）。默认 50；范围 1-5000。非法值自动回退 50。</small>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <strong style="margin-right:10px">ReDoS 静态预检</strong>
+                    <label class="checkbox flex-container" for="regex_precheck_toggle">
+                        <input type="checkbox" id="regex_precheck_toggle" class="enable_scoped" />
+                        <span class="regex-toggle-on fa-solid fa-toggle-on fa-lg" title="开启 ReDoS 预检（默认）"></span>
+                        <span class="regex-toggle-off fa-solid fa-toggle-off fa-lg" title="关闭 ReDoS 预检（承担卡死风险）"></span>
+                    </label>
+                </div>
+                <small style="display:block;text-align:left;opacity:.75;margin:2px 0">执行前检测「嵌套量词」（如 (a+)+）并跳过，防灾难性回溯。关闭则放行被误伤正则（承担卡死风险）。单条误伤可用诊断弹窗「绕过」。</small>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <strong style="margin-right:10px">正则诊断</strong>
+                    <div id="open_regex_diagnose" class="menu_button menu_button_icon" title="正则诊断弹窗（预检拦截放行）">
+                        <i class="fa-solid fa-stethoscope"></i>
+                        <small>打开诊断</small>
+                    </div>
+                </div>
+                <small style="display:block;text-align:left;opacity:.75;margin:2px 0">逐脚本查看「编译 / ReDoS 预检 / 执行」三层状态，被预检拦截的脚本可一键「绕过」放行。</small>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <strong style="margin-right:10px">提示词剥离（预设隐藏行为）</strong>
+                    <label class="checkbox flex-container" for="regex_clean_prompt_toggle">
+                        <input type="checkbox" id="regex_clean_prompt_toggle" class="enable_scoped" />
+                        <span class="regex-toggle-on fa-solid fa-toggle-on fa-lg" title="开启（对提示词施加引擎剥离）"></span>
+                        <span class="regex-toggle-off fa-solid fa-toggle-off fa-lg" title="关闭（提示词原样）"></span>
+                    </label>
+                </div>
+                <small style="display:block;text-align:left;opacity:.75;margin:2px 0">开启后每次发送前对整段提示词施加预设隐藏正则（删选项 fox_selc、剥思维链 think 等，按酒馆标准生效）。消息原文 mes 始终完整保存（狐策/玄狐读原文不受影响）。默认开启；关闭则提示词原样发送。</small>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <strong style="margin-right:10px">保护替换（rphub 模式）</strong>
+                    <label class="checkbox flex-container" for="regex_protect_toggle">
+                        <input type="checkbox" id="regex_protect_toggle" class="enable_scoped" />
+                        <span class="regex-toggle-on fa-solid fa-toggle-on fa-lg" title="关闭保护替换"></span>
+                        <span class="regex-toggle-off fa-solid fa-toggle-off fa-lg" title="开启保护替换"></span>
+                    </label>
+                </div>
+                <small style="display:block;text-align:left;opacity:.75;margin:2px 0">美化正则替换时把 HTML 文档 / script / style / cot/think / 代码块 / 行内代码 / HTML 标签留原样，只替换普通文本。默认开启。</small>
+                <div class="flex-container alignItemsBaseline marginTop5" id="regex_protect_items_block">
+                    <small class="flex1">保护项（勾选 = 保护该内容不被正则替换）：</small>
+                </div>
+                <div class="flex-container alignItemsBaseline marginTop5" id="regex_protect_items_list">
+                    <label class="checkbox flex-container" for="regex_protect_item_html_doc">
+                        <input type="checkbox" id="regex_protect_item_html_doc" class="regex_protect_item" data-item="html_doc" />
+                        <span>完整 HTML 文档</span>
+                    </label>
+                    <label class="checkbox flex-container" for="regex_protect_item_script">
+                        <input type="checkbox" id="regex_protect_item_script" class="regex_protect_item" data-item="script" />
+                        <span>script</span>
+                    </label>
+                    <label class="checkbox flex-container" for="regex_protect_item_style">
+                        <input type="checkbox" id="regex_protect_item_style" class="regex_protect_item" data-item="style" />
+                        <span>style</span>
+                    </label>
+                    <label class="checkbox flex-container" for="regex_protect_item_cot_think">
+                        <input type="checkbox" id="regex_protect_item_cot_think" class="regex_protect_item" data-item="cot_think" />
+                        <span>cot/think</span>
+                    </label>
+                    <label class="checkbox flex-container" for="regex_protect_item_code_block">
+                        <input type="checkbox" id="regex_protect_item_code_block" class="regex_protect_item" data-item="code_block" />
+                        <span>代码块</span>
+                    </label>
+                    <label class="checkbox flex-container" for="regex_protect_item_inline_code">
+                        <input type="checkbox" id="regex_protect_item_inline_code" class="regex_protect_item" data-item="inline_code" />
+                        <span>行内代码</span>
+                    </label>
+                    <label class="checkbox flex-container" for="regex_protect_item_html_tag">
+                        <input type="checkbox" id="regex_protect_item_html_tag" class="regex_protect_item" data-item="html_tag" />
+                        <span>HTML 标签</span>
+                    </label>
+                </div>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <strong style="margin-right:10px">兼容模式</strong>
+                    <label class="checkbox flex-container" for="regex_panel_escape_toggle">
+                        <input type="checkbox" id="regex_panel_escape_toggle" class="enable_scoped" />
+                        <span class="regex-toggle-on fa-solid fa-toggle-on fa-lg" title="兼容模式开启：面板挂载在 regex 容器外"></span>
+                        <span class="regex-toggle-off fa-solid fa-toggle-off fa-lg" title="兼容模式关闭：面板挂载回容器内"></span>
+                    </label>
+                </div>
+                <small style="display:block;text-align:left;opacity:.75;margin:2px 0">面板挂载在 regex 容器外，避免被其它扩展拦截（面板按钮点不动）。仅影响面板交互，不影响渲染。</small>
+            </div>
+            </div><!-- /plugin_settings_section -->
+        </div>
+    </div>
+</div>

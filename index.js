@@ -1,0 +1,125 @@
+/**
+ * RP-Hub 兼容插件 · 自研正则引擎 —— 扩展入口（第二部：事件管道 + 数据层 + 正则面板）
+ *
+ * 本文件是 SillyTavern 扩展的入口（manifest.json 的 `hooks.activate` -> `init`）。
+ *
+ * 结构：
+ *   index.js                    本入口：初始化数据层 + 挂载管道事件 + 挂载正则面板
+ *   src/engine/*                引擎核心（纯函数，可 node 测试）
+ *   src/store/scripts.js        三类脚本存储读写 + 合并（Global→Preset→Scoped）
+ *   src/store/rp-mode.js        formatDetail 判定（后端 /v1/cards/by-name 匹配 + 缓存 + 降级）
+ *   src/pipeline/*              事件管道：显示/prompt/编辑三通道 + 宏注入 + 渲染衔接
+ *   src/panel/*                 正则面板 UI（jQuery 复刻原版，挂 #regex_container）
+ *
+ * 构建方式：纯 ESM 无构建（ST 以 script.type='module' 注入扩展脚本）。
+ *   - 引擎核心与管道纯函数（pure.js / scripts-core.js / rp-mode.js / panel/logic-core.js
+ *     /panel/debugger-core.js 纯逻辑）可 `node --test` 离线测试；
+ *     ST 全局（st-bridge.js / panel/ui.js）仅在浏览器加载。
+ */
+
+import { engine } from './src/engine/engine.js';
+import * as pipeline from './src/pipeline/index.js';
+import * as panel from './src/panel/ui.js';
+import { runtime } from './src/pipeline/runtime.js';
+import { mountCompatApi } from './src/pipeline/force-render.js';
+import { rphubCompatPromptInterceptor } from './src/pipeline/prompt.js';
+import { getFormatDetail, clearModeCache } from './src/store/rp-mode.js';
+import { getRegexScripts } from './src/store/scripts.js';
+import { characters, this_chid, extension_settings, saveSettingsDebounced } from './src/st-bridge.js';
+import { initStreamService } from './src/stream/stream-service.js';
+
+/**
+ * 确保 ST 预设/卡正则白名单（2026-08 思维链美化失效根因修复）。
+ *
+ * 背景（浏览器运行时实测确认）：ST 1.18 显示通道 getRegexedString → getRegexScripts({allowedOnly:true})
+ * → getScriptsByType(PRESET/SCOPED) 要求当前预设 / 当前卡 avatar 分别在
+ * extension_settings.preset_allowed_regex / character_allowed_regex 白名单内，否则**整个预设/卡
+ * 正则列表返回空** —— 预设里所有美化规则（思维链美化等，即使 enabled）在原生显示通道一律不执行
+ * （运行时实测：用户预设「思维链美化 · 表裏」enabled=true 但 preset_allowed_regex=null → 全被过滤）。
+ *
+ * 本函数在扩展启动时把当前预设 + 当前卡加入白名单（等价 SPreset syncToST 的注入逻辑
+ * inject.js:2001-2009），并落盘。幂等；白名单已含则零改动。
+ * 恢复后：ST 原生显示通道（流式期间 messageFormatting 的 getRegexedString + 普通渲染）
+ * 重新执行预设/卡内嵌正则 → 思维链美化、卡内嵌美化等全部恢复。
+ */
+async function ensureRegexWhitelist() {
+    try {
+        const ctx = (typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function')
+            ? SillyTavern.getContext()
+            : null;
+        const api = ctx?.mainApi || 'openai';
+        const presetName = ctx?.chatCompletionSettings?.preset_settings_openai;
+        const avatar = (Array.isArray(characters) && this_chid != null && Number(this_chid) >= 0)
+            ? characters[Number(this_chid)]?.avatar
+            : null;
+        extension_settings.preset_allowed_regex ??= {};
+        extension_settings.preset_allowed_regex[api] ??= [];
+        if (presetName && !extension_settings.preset_allowed_regex[api].includes(presetName)) {
+            extension_settings.preset_allowed_regex[api].push(presetName);
+        }
+        extension_settings.character_allowed_regex ??= [];
+        if (avatar && !extension_settings.character_allowed_regex.includes(avatar)) {
+            extension_settings.character_allowed_regex.push(avatar);
+        }
+        saveSettingsDebounced?.();
+        console.info(`[rp-hub-compat] 正则白名单已确保：预设「${presetName}」api=${api}，卡 avatar=${avatar}（ST 原生显示通道预设/卡正则恢复执行）`);
+    } catch (error) {
+        console.warn('[rp-hub-compat] 正则白名单初始化失败（不阻塞）：', String(error?.message || error));
+    }
+}
+
+/**
+ * 扩展激活入口（由 ST hooks.activate 调用）。
+ */
+export async function init() {
+    if (typeof engine?.run !== 'function') {
+        console.error('[rp-hub-compat] 引擎核心加载失败：engine.run 不存在。');
+        return;
+    }
+
+    // 确保 ST 预设/卡正则白名单（allowedOnly 显示通道前置条件；缺失 → 预设正则全被过滤，
+    // 思维链美化等全部不执行）。不阻塞：失败仅影响 ST 原生显示通道，本引擎管道照常。
+    await ensureRegexWhitelist();
+
+    // 注册 generate_interceptor（F3，审查报告 L3/D7）：manifest.json 的 generate_interceptor 字段
+    // 指向本全局函数，ST 在 script.js:4505（coreChat 组装后）逐条调用 —— prompt 通道 per-message
+    // placement/depth 恢复（原版 script.js:4444-4445 逐字复刻）。
+    try {
+        if (typeof globalThis.rphubCompatPromptInterceptor !== 'function') {
+            globalThis.rphubCompatPromptInterceptor = rphubCompatPromptInterceptor;
+        }
+    } catch {
+        console.warn('[rp-hub-compat] 无法注册 generate_interceptor（prompt 通道将走 GENERATE_AFTER_DATA 兜底整段处理）。');
+    }
+
+    // 数据层自检：三类脚本可读、模式可判定（不阻塞）
+    try {
+        const info = await getFormatDetail({ avatar: characters?.[this_chid]?.avatar, name: characters?.[this_chid]?.name });
+        const mode = info.formatDetail;
+        const scripts = getRegexScripts({ allowedOnly: true, mode });
+        console.debug(`[rp-hub-compat] 当前角色模式：${mode}，合并脚本数：${scripts.length}。`);
+    } catch (error) {
+        console.warn('[rp-hub-compat] 数据层自检失败（不阻塞管道挂载）：', String(error?.message || error));
+    }
+
+    // 挂载管道（显示/prompt/编辑 + 宏注入 + 事件）
+    await pipeline.init();
+
+    // 挂载流式实时渲染服务（P2：STREAM_TOKEN_RECEIVED 段状态机 + DOM 回插。
+    // 开关 rp_hub_stream_render_enabled 默认关闭 → 零介入；开启后流式期间段级渲染）
+    initStreamService();
+
+    // 挂载正则面板（#regex_container，dropdown 三分类 + 预设分组 + 编辑器 + 调试器）
+    try {
+        await panel.init();
+    } catch (error) {
+        console.error('[rp-hub-compat] 正则面板初始化失败（不阻塞引擎管道）：', String(error?.message || error));
+    }
+
+    // 挂全局入口 window.__rphubCompat__（第三部「强制重新渲染」按钮调用）：
+    //   clearModeCache —— 清 formatDetail 内存缓存（30 分钟 TTL，后端标记变化后立即可见）
+    //   forceRerenderAll —— 遍历聊天逐条重算 + 围栏化 + 覆盖 DOM（后台执行不卡 UI）
+    mountCompatApi();
+
+    console.debug('[rp-hub-compat] 事件管道已启动。宏注入：ST substituteParams/substituteParamsExtended。');
+}
