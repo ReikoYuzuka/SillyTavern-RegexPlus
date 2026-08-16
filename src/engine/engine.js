@@ -744,8 +744,10 @@ export function run(args = {}) {
     //     会全文扫描到尾部预置 UI 面板而误伤正文）；隐藏状态 / 状态面板生成等普通 scoped 照常
     //     （与妹生活状态面板靠 scoped 生成，不能被跳过）。
     //   暴力（fulltextOnly=false）：跳过全部 scoped。
+    // ⚠️ 仅 rphub 模式生效（mode==='rphub' 门控）：这是 RP 卡开场白 UI 面板冲突的专属优化，
+    //   原版卡（st 模式）不做任何跳过 —— 第 0 楼 scoped 正则照常执行，保持与原版逐字一致。
     // 预设/全局不受影响。
-    const scripts = (options.excludeFirstMessage === true && isFirstMessage === true)
+    const scripts = (mode === 'rphub' && options.excludeFirstMessage === true && isFirstMessage === true)
         ? rawScripts.filter((s) => {
             if (!s || s.rp_source !== 'scoped') return true; // 非 scoped 照常
             if (options.excludeFirstMessageFulltextOnly === false) return false; // 暴力档：跳过全部 scoped

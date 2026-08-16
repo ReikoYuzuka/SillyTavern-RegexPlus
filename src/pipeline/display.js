@@ -73,6 +73,10 @@ export async function processAndCover(messageId, { source, force = false, isEdit
         return { handled: false, reason: 'already-handled' };
     }
     const mode = await runtime.getMode();
+    // ⚠️ 仅 rphub 模式接管显示：原版卡（st）的显示由 ST 原生 messageFormatting 处理
+    //   （script.js:1809 getRegexedString isMarkdown），本插件不介入 —— 否则引擎处理 +
+    //   ST messageFormatting 二次应用 markdownOnly 脚本（render.js 用 messageFormatting 渲染）。
+    if (mode !== 'rphub') return { handled: false, reason: 'st-mode-not-managed' };
     const scripts = runtime.getScripts(mode);
     const runArgs = {
         ...derivePlacement(msg),
@@ -137,6 +141,12 @@ export async function coverMessage(messageId, { forceApply = false, editRecovery
         }
         return;
     }
+    // ⚠️ 仅 rphub 模式接管显示：原版卡（st）的显示由 ST 原生 messageFormatting 渲染
+    //   （script.js:1809 getRegexedString isMarkdown），本插件不覆盖 DOM —— 否则引擎处理 +
+    //   ST messageFormatting 二次应用 markdownOnly 脚本（显示双重应用，render.js 用
+    //   messageFormatting 渲染引擎结果）。
+    const mode = await runtime.getMode();
+    if (mode !== 'rphub') return;
     const $mesText = runtime.chatElement.find(`.mes[mesid="${messageId}"] .mes_text`);
     if (!$mesText.length) return;
     if (isEditingDom($mesText)) return; // 编辑态（.mes_text 内为 textarea）跳过
@@ -148,8 +158,7 @@ export async function coverMessage(messageId, { forceApply = false, editRecovery
     if (hasTavernHelperRender($mesText) && !editRecovery) return;
 
     // 显示通道 HTML 围栏化模式判定（设计 §5 / 界面按钮点不动诊断.md 方案 A）：
-    // 仅 rphub 模式启用（formatDetail=rphub 语义）；st 模式跳过、原样行为不变。
-    const mode = await runtime.getMode();
+    // 仅 rphub 模式启用（formatDetail=rphub 语义）；st 模式已在上方门控跳过。
 
     let text;
     if (msg.extra?.rph_done && !forceApply) {
