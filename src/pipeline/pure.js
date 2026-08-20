@@ -132,6 +132,7 @@ export function snapshotRaw(msg) {
 export function needsReprocess(msg) {
     if (!msg || typeof msg !== 'object') return false;
     if (typeof msg.mes !== 'string') return false;
+    if (msg.extra?.rph_stream_processed === true) return false;
     return msg.mes !== msg.extra?.[RAW_MES_KEY];
 }
 
@@ -370,6 +371,7 @@ export function commitMessageView(msg, { raw, display, prompt, fp } = {}) {
     if (typeof fp === 'string' && fp.length > 0) msg.extra[DISPLAY_FP_KEY] = fp;
     if (!isTemplateRendered(msg)) msg.extra.display_text = display;
     msg.extra[FLAG_KEY] = true;
+    delete msg.extra.rph_stream_processed;
     msg.mes = raw;
     return msg;
 }

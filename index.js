@@ -30,6 +30,7 @@ import { getFormatDetail, clearModeCache } from './src/store/rp-mode.js';
 import { getRegexScripts, getCurrentPresetAPI, getCurrentPresetName } from './src/store/scripts.js';
 import { characters, this_chid, extension_settings, saveSettingsDebounced, eventSource, event_types } from './src/st-bridge.js';
 import { initStreamService } from './src/stream/stream-service.js';
+import { initLegacyStreamHook } from './src/stream/legacy-hook.js';
 
 /**
  * 确保 ST 预设/卡正则白名单（2026-08 思维链美化失效根因修复）。
@@ -122,6 +123,9 @@ export async function init() {
 
     // 挂载管道（显示/prompt/编辑 + 宏注入 + 事件）
     await pipeline.init();
+
+    // 挂载 ST 卡流式即时正则拦截器（还原原版 ST 正则随写随擦流式体验）
+    initLegacyStreamHook();
 
     // 挂载流式实时渲染服务（P2：STREAM_TOKEN_RECEIVED 段状态机 + DOM 回插。
     // 开关 rp_hub_stream_render_enabled 默认关闭 → 零介入；开启后流式期间段级渲染）

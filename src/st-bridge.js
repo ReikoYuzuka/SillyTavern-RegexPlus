@@ -28,6 +28,7 @@ export {
     substituteParamsExtended,
     reloadCurrentChat,
     getCurrentChatId,
+    streamingProcessor,
 } from '../../../../../script.js';
 
 // public/scripts/（4 级上溯）
