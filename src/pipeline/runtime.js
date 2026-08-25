@@ -16,7 +16,7 @@
 import { engine } from '../engine/engine.js';
 import { getRegexScripts } from '../store/scripts.js';
 import { getFormatDetail } from '../store/rp-mode.js';
-import { isCleanPromptEnabled, isProtectEnabled, getProtectItems as readProtectItems, getDegradeTarget, getBudgetMs as readBudgetMs, isPrecheckEnabled, getPrecheckBypass, isAutoProtectScriptEnabled, isExcludeFirstMessageEnabled, isExcludeFirstFulltextOnly, getRenderMode as readRenderMode, getPassRules as readPassRules, getCleanRules as readCleanRules, getSecondPassFilter as readSecondPassFilter, isSecondPassEnabled as readSecondPassEnabled, isSkipBlankSegments as readSkipBlankSegments } from '../store/settings.js';
+import { isCleanPromptEnabled, isProtectEnabled, getProtectItems as readProtectItems, getDegradeTarget, getBudgetMs as readBudgetMs, isPrecheckEnabled, getPrecheckBypass, isAutoProtectScriptEnabled, isExcludeFirstMessageEnabled, isExcludeFirstFulltextOnly, getRenderMode as readRenderMode, getPassRules as readPassRules, getCleanRules as readCleanRules, getSecondPassFilter as readSecondPassFilter, isSecondPassEnabled as readSecondPassEnabled, isSkipBlankSegments as readSkipBlankSegments, getStreamMatch } from '../store/settings.js';
 import {
     chat,
     characters,
@@ -28,6 +28,48 @@ import {
     substituteParams,
     substituteParamsExtended,
 } from '../st-bridge.js';
+
+/* ---------- 排除模式转译（语义 A，《流式排除模式可行性报告》） ---------- */
+
+/** 正则元字符转义：字面标签串（如 `<状态栏>`）→ 正则安全形态。 */
+function escapeRegExpLiteral(s) {
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 把 rp_hub_stream_match 的规则转译为附加 cleanRules（route==='exclude' 时非空）：
+ * 每条规则 → { pattern, replaceEnabled:false, replace:null } —— 经引擎 maskUISegments
+ * 藏走占位符（阶段②脚本不可见 ＝ 不进 RP 引擎），restoreCleanSegments 对
+ * replaceEnabled=false 的段【原样拼回】（＝交酒馆原生通道）。
+ * 形态：start+end → `start[\s\S]*?end`（惰性，多次出现各自命中）；
+ *       仅 start   → `start[\s\S]*$`（贪婪到楼尾）；
+ *       仅 end     → `^[\s\S]*?end`（开头到首个闭合）；
+ *       advanced rx → pattern 原样使用（裸正则，不含 /…/ 定界符）。
+ * 顺序约定：派生规则置于用户 cleanRules 【之前】拼接 —— maskUISegments 的 alternation
+ * 最左优先 + testers 锚定归属首条命中，用户显式的排除意图优先于壳剥离类内置规则；
+ * 与内置清洗规则文本重叠时以先匹配为准（文档化行为）。
+ * @param {object|null} streamMatch getStreamMatch() 归一产物
+ * @returns {Array<{ pattern: string, replaceEnabled: boolean, replace: null }>}
+ */
+function buildExcludeCleanRules(streamMatch) {
+    if (!streamMatch || streamMatch.route !== 'exclude') return [];
+    const out = [];
+    const push = (pattern) => {
+        const p = String(pattern ?? '').trim();
+        if (p) out.push({ pattern: p, replaceEnabled: false, replace: null });
+    };
+    for (const r of Array.isArray(streamMatch.rules) ? streamMatch.rules : []) {
+        const s = r.start ? escapeRegExpLiteral(r.start) : '';
+        const e = r.end ? escapeRegExpLiteral(r.end) : '';
+        if (s && e) push(`${s}[\\s\\S]*?${e}`);
+        else if (s) push(`${s}[\\s\\S]*$`);
+        else if (e) push(`^[\\s\\S]*?${e}`);
+    }
+    for (const x of Array.isArray(streamMatch.rx) ? streamMatch.rx : []) {
+        if (x && typeof x.pattern === 'string') push(x.pattern);
+    }
+    return out;
+}
 
 export const runtime = {
     active: false,
@@ -171,6 +213,15 @@ export const runtime = {
                 JSON.stringify(p),
                 JSON.stringify(c),
                 JSON.stringify(f),
+                // 排除模式纳管（必改项，防切换后旧缓存假失效）：include 态摘要恒定（改流式
+                // 标签不影响正式链路输出、不无谓失效缓存）；exclude 态携带转译产物摘要——
+                // 规则变 → 指纹变 → rph_display 缓存正确失效重算。
+                (() => {
+                    const sm = getStreamMatch();
+                    return sm.route === 'exclude'
+                        ? 'exclude|' + JSON.stringify(buildExcludeCleanRules(sm))
+                        : 'include';
+                })(),
             ].join('|');
         } catch {
             return 'err';
@@ -194,7 +245,9 @@ export const runtime = {
                 excludeFirstMessageFulltextOnly: runtime.getExcludeFirstFulltextOnly(),
                 renderMode: runtime.getRenderMode(),
                 passRules: runtime.getPassRules(),
-                cleanRules: runtime.getCleanRules(),
+                // 排除模式（语义 A）：派生规则置于用户 cleanRules 之前 —— alternation 最左
+                // 优先，用户显式排除意图优先于壳剥离类内置/自定义清洗规则；include 态为空数组。
+                cleanRules: [...buildExcludeCleanRules(getStreamMatch()), ...runtime.getCleanRules()],
                 secondPassFilter: runtime.getSecondPassFilter(),
                 secondPassEnabled: runtime.getSecondPassEnabled(),
                 skipBlankSegments: runtime.getSkipBlankSegments(),

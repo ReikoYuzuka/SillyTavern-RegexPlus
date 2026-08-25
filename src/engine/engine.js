@@ -99,6 +99,20 @@ const defaultMacros = {
 };
 
 /**
+ * 缺省来源推断（resolveScriptSource）：
+ * 未经过 mergeScripts 打标的裸规则对象（如外部直接调用 engine.run 或单元测试场景），
+ * rp_source 为 undefined 时默认推断为 'preset' 级别，保证阶段 ① 与阶段 ③ 管线正常执行。
+ * @param {object} script
+ * @returns {string}
+ */
+export function resolveScriptSource(script) {
+    if (script && typeof script === 'object' && typeof script.rp_source === 'string' && script.rp_source.length > 0) {
+        return script.rp_source;
+    }
+    return 'preset';
+}
+
+/**
  * 脚本规范化（st 字段默认值，对照原版默认）。
  * 调用方合并三类存储时通常会传 ST 12 字段；此处兜底，防止缺失字段导致异常。
  * rphub 模式保留原始字段（其 placement 缺省 = [1,2] 全生效、enabled 缺省 = 启用），
@@ -106,11 +120,13 @@ const defaultMacros = {
  */
 function normalizeScript(script, mode = 'st') {
     if (!script || typeof script !== 'object') return null;
+    const resolvedSource = resolveScriptSource(script);
     if (mode === 'rphub') {
-        return { ...script };
+        return { ...script, rp_source: resolvedSource };
     }
     return {
         ...script,
+        rp_source: resolvedSource,
         placement: Array.isArray(script.placement) ? script.placement : [1],
         disabled: !!script.disabled,
         markdownOnly: !!script.markdownOnly,
@@ -595,6 +611,7 @@ function splitAtUIPlaceholders(s) {
 function runScriptOnMasked(script, maskedText, executor, maskScripts, skipBlankSegments = false, budgetMs = 0, segments = null) {
     const segState = segments || splitAtUIPlaceholders(maskedText);
     let lastEntry = null;
+    let modified = false;
     const start = budgetMs > 0 ? nowMs() : null;
     for (let i = 0; i < segState.length; i++) {
         const part = segState[i];
@@ -608,10 +625,13 @@ function runScriptOnMasked(script, maskedText, executor, maskScripts, skipBlankS
             continue; // F10：脚本级预算耗尽，剩余纯段原样保留
         }
         const r = executor(script, part, { maskScripts });
-        segState[i] = r.text;
+        if (r.text !== part) {
+            modified = true;
+            segState[i] = r.text;
+        }
         if (r.entry) lastEntry = r.entry;
     }
-    return { text: segments ? null : segState.join(''), entry: lastEntry };
+    return { text: segments ? null : segState.join(''), entry: lastEntry, modified };
 }
 
 /**
@@ -939,10 +959,16 @@ export function run(args = {}) {
         const script = normalizeScript(rawScript, mode);
         if (!script) continue;
         const inFirst = shouldEnterPass(script, firstRules, 'preset');
+        if (inFirst) {
+            firstScripts.push(script);
+            continue;
+        }
         const inSecond = shouldEnterPass(script, secondRules, 'preset');
-        if (inFirst) firstScripts.push(script);
-        if (inSecond) secondScripts.push(script);
-        if (!inFirst && !inSecond) localScripts.push(script);
+        if (inSecond) {
+            secondScripts.push(script);
+            continue;
+        }
+        localScripts.push(script);
     }
 
     let finalString = text;
@@ -967,14 +993,21 @@ export function run(args = {}) {
     // 修复：每个脚本跑完后重新藏走新生成的界面段（占位符计数器续接 parts.length，避免编号冲突）。
     // 幂等：已藏占位符含 \u0001，清洗规则不命中，不会被二次藏走。
     let nextCounter = parts.length;
+    // 脏检查快速正则检测：检查是否可能包含 UI 标签或代码块
+    const MAYBE_UI_TAGS_RE = /<|```/;
     for (const script of localScripts) {
         const r = runScriptOnMasked(script, finalString, executor, structuralMask(script), skipBlankSegments === true, budgetMs, segState);
         if (r.entry) applied.push(r.entry);
-        const 重藏 = maskUISegments(segState.join(''), cleanRules, nextCounter);
-        if (重藏.parts.length > 0) {
-            segState = splitAtUIPlaceholders(重藏.masked);
-            parts.push(...重藏.parts);
-            nextCounter += 重藏.parts.length;
+        if (r.modified) {
+            const currentCombined = segState.join('');
+            if (MAYBE_UI_TAGS_RE.test(currentCombined)) {
+                const 重藏 = maskUISegments(currentCombined, cleanRules, nextCounter);
+                if (重藏.parts.length > 0) {
+                    segState = splitAtUIPlaceholders(重藏.masked);
+                    parts.push(...重藏.parts);
+                    nextCounter += 重藏.parts.length;
+                }
+            }
         }
     }
     finalString = segState.join('');

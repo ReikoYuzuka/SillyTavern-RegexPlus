@@ -628,6 +628,11 @@ function renderStreamMatch(match) {
     const advanced = m.mode === STREAM_MATCH_MODE_ADVANCED;
     $('#regex_stream_advanced_toggle').data('advanced', advanced);
     $('#regex_stream_advanced_toggle').find('small').text(advanced ? '标准模式' : '高级模式');
+    // 匹配作用 radio 回填（排除模式特性；缺省 include）
+    const exclude = m.route === 'exclude';
+    $('input[name="rp_stream_route"][value="exclude"]').prop('checked', exclude);
+    $('input[name="rp_stream_route"][value="include"]').prop('checked', !exclude);
+    renderRouteVisibility(exclude);
     const rules = Array.isArray(m.rules) ? m.rules : [];
     const rx = Array.isArray(m.rx) ? m.rx : [];
     $('#regex_stream_rules_container .rp_stream_rule_row').remove();
@@ -648,6 +653,8 @@ function addStreamRuleRow(rule) {
     const row = tpl.clone().removeClass('displayNone').removeAttr('id').addClass('rp_stream_rule_row');
     row.find('input[name="rp_stream_rule_start"]').val(rule?.start ?? '');
     row.find('input[name="rp_stream_rule_end"]').val(rule?.end ?? '');
+    // 匹配方式（贪婪匹配至末标签）：首个=缺省/现行懒匹配；最后一个=锚定文中最后一次出现
+    row.find('select[name="rp_stream_rule_match"]').val(rule?.match === 'last' ? 'last' : 'first');
     $('#regex_stream_rules_container').append(row);
 }
 
@@ -678,7 +685,35 @@ function collectStreamMatch() {
         mode: advanced ? STREAM_MATCH_MODE_ADVANCED : STREAM_MATCH_MODE_BASIC,
         rules,
         rx,
+        // 匹配作用（排除模式）：include=选中标签交 RP（缺省/现行）；exclude=选中标签区间交酒馆原生
+        route: $('input[name="rp_stream_route"]:checked').val() === 'exclude' ? 'exclude' : 'include',
     };
+}
+
+/**
+ * 匹配作用（route）联动渲染：排除态把 excludes 区块置灰并显示提示条 —— excludes 列表
+ * 作用于「已被 RP 接管的段内容」，排除模式下没有任何段被接管，列表不适用（《排除模式
+ * 报告》§2.5：两套排除层次不同，UI 隔离防无效调参困惑）。样式走内联，避免新增样式表。
+ * @param {boolean} [exclude] 是否排除态；缺省读当前 radio
+ */
+function renderRouteVisibility(exclude) {
+    const isExclude = typeof exclude === 'boolean'
+        ? exclude
+        : $('input[name="rp_stream_route"]:checked').val() === 'exclude';
+    const $container = $('#regex_stream_excludes_container');
+    if ($container.length === 0) return;
+    let $notice = $('#regex_stream_exclude_notice');
+    if ($notice.length === 0) {
+        $notice = $('<small id="regex_stream_exclude_notice" class="displayNone" style="display:block;text-align:left;color:#e0a24a;margin:2px 0"></small>')
+            .text('⚠️ 排除模式下不适用：本列表用于处理已被 RP 接管的段内容；当前不会有任何段被接管。');
+        $container.closest('.flex-container.marginTop5').before($notice);
+    }
+    $notice.toggleClass('displayNone', !isExclude);
+    const $title = $container.closest('.flex-container.marginTop5');
+    const dim = { opacity: isExclude ? '0.45' : '', 'pointer-events': isExclude ? 'none' : '' };
+    $title.css(dim);
+    $title.next('small').css(dim);
+    $container.css(dim);
 }
 
 /** 渲染排除规则行列表（回填用）。 */
@@ -752,8 +787,15 @@ function renderStreamModeBlocks() {
 
 /** 从 DOM 收集匹配配置 + 排除规则 → setter + 持久化。 */
 function saveStreamConfigFromDom() {
-    setStreamMatch(collectStreamMatch());
+    const before = getStreamMatch().route === 'exclude' ? 'exclude' : 'include';
+    const collected = collectStreamMatch();
+    setStreamMatch(collected);
     setStreamExcludes(collectStreamExcludes());
+    // 匹配作用切换提示（不弹 confirm：settingsFp 已纳管 route，缓存自动失效、
+    // 历史消息在下次渲染事件按新模式重算——非破坏性，toast 指引立即生效入口即可）
+    if (before !== (collected.route || 'include') && typeof toastr !== 'undefined' && toastr?.info) {
+        toastr.info(t`匹配作用已切换：历史消息将在下次渲染事件时更新；如需立即生效，请使用「强制重新渲染」。`, undefined, { timeOut: 6000 });
+    }
     saveSettingsDebounced();
 }
 
@@ -782,6 +824,12 @@ function bindStreamRenderEditor() {
             if ($('#regex_stream_rules_container .rp_stream_rule_row').length === 0) addStreamRuleRow({});
         }
         renderStreamModeVisibility();
+        saveStreamConfigFromDom();
+    });
+
+    // 匹配作用 radio（排除模式）：即时联动 excludes 区块置灰/提示条，并走统一保存（含切换 toast）
+    $('input[name="rp_stream_route"]').on('change', function () {
+        renderRouteVisibility();
         saveStreamConfigFromDom();
     });
 
@@ -822,7 +870,7 @@ function bindStreamRenderEditor() {
         saveStreamConfigFromDom();
     });
 
-    // 恢复默认：开关关 + 内置默认匹配（标准模式预填正文标签 <content>）+ 无排除
+    // 恢复默认：开关关 + 内置默认匹配（标准模式预填正文标签 <content>）+ 无排除 + 匹配作用回「包含」+ match 回「首个」
     $('#regex_stream_reset').on('click', function () {
         setStreamRenderEnabled(false);
         $('#regex_stream_render_toggle').prop('checked', false);
@@ -831,8 +879,9 @@ function bindStreamRenderEditor() {
         renderStreamMatch(DEFAULT_STREAM_MATCH);
         renderStreamExcludes([]);
         renderStreamModeBlocks();
+        renderRouteVisibility();
         saveSettingsDebounced();
-        toastr.info(t`已恢复默认流式配置（开关关、标准模式默认匹配正文标签 <content>、无排除）。`);
+        toastr.info(t`已恢复默认流式配置（开关关、标准模式默认匹配正文标签 <content>、无排除、匹配作用=包含、匹配方式=首个）。`);
     });
 }
 

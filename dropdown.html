@@ -191,6 +191,10 @@
                 <small style="display:block;text-align:left;opacity:.75;margin:2px 0">默认关闭（模式一·完整渲染，零影响）。开启后流式期间实时检查下方「段匹配配置」：匹配到起始标签/正则 → 段内容实时交引擎渲染（节流持续更新 + 闭合定格）；匹配到闭合 → 交回酒馆原生通道；流式结束后正式链路渲染整条消息时，正文段区间用流式定格结果拼合（无跳变、不二次渲染正文段）。</small>
                 <div class="flex-container alignItemsBaseline marginTop5">
                     <strong style="margin-right:10px">段匹配配置</strong>
+                    <!-- 匹配作用（排除模式）：包含=选中标签内容交 RP 引擎（现行）；排除=选中标签区间保持原样交酒馆原生通道，其余交 RP -->
+                    <span style="margin-right:4px;opacity:.85" class="rp_stream_route_label">匹配作用:</span>
+                    <label class="checkbox_label" style="margin-right:8px" title="选中标签的内容实时交 RP 引擎渲染（现行行为）"><input type="radio" name="rp_stream_route" value="include" checked /><span>包含</span></label>
+                    <label class="checkbox_label" style="margin-right:10px" title="排除：选中标签区间保持原样交酒馆原生通道处理（不进 RP 引擎），其余内容交 RP 引擎渲染；流式期间不做段级接管"><input type="radio" name="rp_stream_route" value="exclude" /><span>排除</span></label>
                     <div id="regex_stream_advanced_toggle" class="menu_button menu_button_icon" title="切换普通/高级模式" tabindex="0" role="button">
                         <i class="fa-solid fa-arrows-rotate"></i>
                         <small>高级模式</small>
@@ -215,6 +219,11 @@
                 <div id="regex_stream_rule_template" class="displayNone flex-container alignItemsBaseline marginTop5" style="gap:4px">
                     <input name="rp_stream_rule_start" class="text_pole textarea_compact flex1" type="text" placeholder="标签头，如 &lt;think_fox~&gt;" />
                     <input name="rp_stream_rule_end" class="text_pole textarea_compact flex1" type="text" placeholder="标签尾，如 &lt;/think_fox~&gt;" />
+                    <!-- 匹配方式（贪婪匹配至末标签）：首个=现行懒匹配；最后一个=锚定文中最后一次出现（终结性：其后内容归入本段） -->
+                    <select name="rp_stream_rule_match" class="text_pole" style="flex:0 0 auto;min-width:88px;width:88px" title="首个：取文中第一次出现的闭合标签（现行行为）。&#10;最后一个：取文中最后一次出现——其后全部内容归入本段，不再分段。">
+                        <option value="first">首个</option>
+                        <option value="last">最后一个</option>
+                    </select>
                     <div class="rp_stream_rule_remove menu_button menu_button_icon interactable" title="删除这组标签对" tabindex="0" role="button">
                         <i class="fa-solid fa-trash"></i>
                     </div>

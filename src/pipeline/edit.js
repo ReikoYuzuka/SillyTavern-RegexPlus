@@ -132,30 +132,14 @@ export async function onMessageEdited(messageId) {
     const msg = runtime.chat[messageId];
     if (!msg || typeof msg.mes !== 'string') return;
 
-    const editedText = msg.mes;
-    const preEditRaw = typeof msg.extra?.rph_raw_mes === 'string' ? msg.extra.rph_raw_mes : null;
-    // edit-E1 修复：加 .edit_textarea class 双判据（ST 升级若改 id，仍可凭 class 识别编辑态）
-    const textareaPresent = typeof runtime.chatElement?.find === 'function'
-        && (runtime.chatElement.find('#curEditTextarea').length > 0
-            || runtime.chatElement.find('.edit_textarea').length > 0);
-    const kind = classifyEditedSave({ editedText, preEditRaw, textareaPresent });
+    // MESSAGE_EDITED 是用户明确点击保存的独占事件：
+    // 无论是用户消息还是 AI 消息，msg.mes 均已由 ST updateMessage 写入最新的输入文本（Truth Source）。
+    // 信任用户保存的内容，不再通过 DOM 存在性或标签拦截回退为旧原文。
+    const source = msg.mes;
+    syncAfterEdit(msg, source); // rph_raw_mes 同步为编辑后内容，清空旧显示缓存/模板标记，等待重算
 
-    let source;
-    if (kind === 'readback' && preEditRaw !== null) {
-        // 快速交错读回污染：回退用干净 rph_raw_mes 重算（自愈式纠错，不固化剥离标记的文本）
-        console.warn('[rp-hub-compat] 编辑保存疑似读回污染（编辑框已关闭，mes 来自 .mes_text 回退），回退用 rph_raw_mes 原文重算。');
-        source = preEditRaw;
-    } else {
-        const decided = resolveEditSource(editedText, msg);
-        source = decided.source;
-        if (!decided.adopt) {
-            console.warn('[rp-hub-compat] 编辑保存检测到疑似显示产物污染（mes 被替换为引擎显示文本），已回退用 rph_raw_mes 原文重算。');
-        }
-    }
-    syncAfterEdit(msg, source); // rph_raw_mes 同步（采纳=编辑后内容；拒绝=回退干净原文），清双通道结果与标记
-
-    // F5（审查报告 L5/D9）：isEdit: true 透传 —— 存储通道（general）按原版 script.js:8100 语义，
-    // runOnEdit=false 的 general 脚本编辑保存时跳过；显示通道不受 isEdit 影响（原版 messageFormatting 不传）。
+    // F5：isEdit: true 透传 —— 存储通道（general）按原版 script.js:8100 语义，
+    // runOnEdit=false 的 general 脚本编辑保存时跳过；显示通道不受 isEdit 影响。
     const result = await processAndCover(messageId, { source, force: true, isEdit: true });
     if (result.handled) {
         await runtime.saveChatConditional();

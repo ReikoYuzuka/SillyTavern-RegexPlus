@@ -187,17 +187,17 @@ export class BudgetInterrupted extends Error {
 /**
  * ECMAScript AdvanceStringIndex（RegExpBuiltinExec / String.prototype.replace 的零宽推进语义）。
  *
- * 返回从 index 起推进一个 code point 边界后的位置：isUnicode=false 时恒为 index+1；
- * isUnicode=true 且 index 处是 surrogate pair 高位（后随低位）时返回 index+2（跳过整个对），否则 index+1。
- * String.replace 在每次零宽匹配后用它推进 searchValue.[[LastIndex]]，从而不丢字符地跳过当前匹配点。
+ * 无论正则是否携带 /u 标志，无条件检测 UTF-16 surrogate pairs：
+ * 当 index 处是 surrogate pair 高位（0xD800-0xDBFF）且后随低位（0xDC00-0xDFFF）时返回 index+2（跳过整个对），
+ * 否则返回 index+1。防止拆散 Emoji / 生僻字导致孤立代理项乱码（Malformed UTF-16）。
  */
 function advanceStringIndex(S, index, isUnicode) {
-    if (!isUnicode) return index + 1;
     const first = S.charCodeAt(index);
-    if (first < 0xd800 || first > 0xdbff) return index + 1;
-    const second = S.charCodeAt(index + 1);
-    if (second < 0xdc00 || second > 0xdfff) return index + 1;
-    return index + 2;
+    if (first >= 0xd800 && first <= 0xdbff && index + 1 < S.length) {
+        const second = S.charCodeAt(index + 1);
+        if (second >= 0xdc00 && second <= 0xdfff) return index + 2;
+    }
+    return index + 1;
 }
 
 /**
@@ -242,8 +242,10 @@ export function runInterruptibleReplace(text, regex, replacer, budgetMs, startTi
         if (m[0].length === 0) {
             // 零宽匹配（match[0] === ''）：匹配结束位置 = m.index（零宽不消耗字符）。
             // 输出游标停在匹配结束位置（旧实现无条件 +1 会跳过并丢失一个字符）；
-            // 搜索游标按 AdvanceStringIndex 语义推进（isUnicode 且该处为 surrogate pair
-            // 高位时跳 2，否则跳 1），与 String.prototype.replace 的零宽推进完全一致，不丢字符。
+            // 搜索游标推进（advanceStringIndex，本模块自定义语义，非 ECMA AdvanceStringIndex 原义）：
+            // 无论正则是否携带 /u，只要 index 处是完整的 UTF-16 surrogate pair（高位后随低位）
+            // 就跳过整个对（index+2），否则 +1 —— 防止零宽正则把 Emoji/生僻字拆成孤立代理项乱码。
+            // 有意偏离 ECMA 规范（规范对非 unicode 正则恒 +1）；孤立结尾高位代理由边界守卫回落 +1。
             out += text.slice(lastIndex, m.index) + String(replacer(buildArgs(m)));
             lastIndex = m.index;
             regex.lastIndex = advanceStringIndex(text, m.index, regex.unicode || regex.unicodeSets);
@@ -269,16 +271,46 @@ function buildArgs(m) {
 /**
  * 超时/预检告警节流（O7，审查报告 P7）：每脚本键 60s 内只打一次 console.warn，
  * 避免慢脚本/被拦截脚本在长聊天每次渲染刷屏（原版无预算故无此噪音）。
+ * 设置容量上限 200 条的 FIFO 淘汰机制，防止长时间挂机单调递增导致内存泄漏。
  */
 const warnThrottle = new Map();
 const WARN_THROTTLE_MS = 60 * 1000;
+const WARN_THROTTLE_MAX_CAPACITY = 200;
 
 const warn = typeof console !== 'undefined' ? (msg) => console.warn(msg) : () => {};
+
+/** ReDoS 拦截用户提示的去重集（每脚本键每次会话只弹一次 toastr；console.warn 行为不变）。 */
+const redosToastShown = new Set();
+
+/**
+ * ReDoS 预检拦截的用户可见警告（toastr.warning，若宿主提供）。
+ * 三要素：哪条脚本被拦 / 原因一句话 / 放行出路（豁免名单）。纯模块环境无 toastr → 静默跳过，
+ * 不影响 node 测试与主流程；拦截行为本身零改动。
+ */
+function notifyRedosBlocked(warnKey, scriptName) {
+    if (redosToastShown.has(warnKey)) return;
+    redosToastShown.add(warnKey);
+    try {
+        if (typeof toastr !== 'undefined' && toastr && typeof toastr.warning === 'function') {
+            toastr.warning(
+                `正则「${scriptName}」疑似正则回溯风险，已被防卡死检查拦截（该脚本未执行）。如确认安全，可将其加入预算设置的豁免名单后重新渲染。`,
+                undefined,
+                { timeOut: 10000 },
+            );
+        }
+    } catch {
+        // 通知失败不影响主流程
+    }
+}
 
 function throttledWarn(key, msg) {
     const nowTs = Date.now();
     const last = warnThrottle.get(key);
     if (last !== undefined && nowTs - last < WARN_THROTTLE_MS) return;
+    if (warnThrottle.size >= WARN_THROTTLE_MAX_CAPACITY && !warnThrottle.has(key)) {
+        const oldestKey = warnThrottle.keys().next().value;
+        if (oldestKey !== undefined) warnThrottle.delete(oldestKey);
+    }
     warnThrottle.set(key, nowTs);
     warn(msg);
 }
@@ -316,6 +348,7 @@ export function withBudget({ scriptName, pattern, flags, run, budgetMs = 50, rec
         const entry = { scriptName, timedOut: true, reason: 'redos-precheck', elapsedMs: 0 };
         if (record) record(entry);
         throttledWarn(warnKey, `[rp-hub-compat] 正则「${scriptName}」被 ReDoS 预检拦截（嵌套量词），已跳过。`);
+        notifyRedosBlocked(warnKey, scriptName); // 用户可见警告：每脚本键每会话一次（toastr）
         return { timedOut: true, reason: 'redos-precheck', elapsedMs: 0 };
     }
 

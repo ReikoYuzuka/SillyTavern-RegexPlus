@@ -36,6 +36,7 @@ import {
     buildScriptFingerprint,
     applyScriptExtras,
     SCRIPT_EXTRAS_FIELDS,
+    djb2Hash,
 } from './scripts-core.js';
 import {
     getOrderSource,
@@ -301,24 +302,50 @@ export function getScriptFingerprintContext(kind) {
     return {};
 }
 
+/** 计算脚本次级消歧哈希（id 优先，否则用 replaceString 哈希）。 */
+function getScriptSubHash(script) {
+    if (!script || typeof script !== 'object') return '';
+    if (script.id) return String(script.id);
+    if (script.replaceString !== undefined && script.replaceString !== null) {
+        return 'r' + djb2Hash(String(script.replaceString));
+    }
+    return '';
+}
+
 /**
  * 取脚本的本地 extras（按指纹查存储；无 → null）。
- * @param {object} script 脚本对象（读 scriptName / findRegex）
+ * 支持双向回退兼容：先查包含 subHash 的次级消歧键；未命中时回退查无 subHash 的旧版键。
+ * @param {object} script 脚本对象（读 scriptName / findRegex / id / replaceString）
  * @param {'scoped'|'preset'|'global'} kind
  * @param {object} [context] 指纹上下文（缺省取当前上下文）
  * @returns {object|null}
  */
 export function getScriptExtras(script, kind, context) {
     if (!script || typeof script !== 'object') return null;
-    const key = buildScriptFingerprint({
+    const ctx = context || getScriptFingerprintContext(kind);
+    const subHash = getScriptSubHash(script);
+    const keyWithSub = subHash ? buildScriptFingerprint({
         kind,
-        ...(context || getScriptFingerprintContext(kind)),
+        ...ctx,
+        scriptName: script.scriptName,
+        findRegex: script.findRegex,
+        subHash,
+    }) : null;
+    const legacyKey = buildScriptFingerprint({
+        kind,
+        ...ctx,
         scriptName: script.scriptName,
         findRegex: script.findRegex,
     });
-    if (!key) return null;
-    const extras = getScriptExtrasStore()[key];
-    return extras && typeof extras === 'object' && !Array.isArray(extras) ? extras : null;
+
+    const store = getScriptExtrasStore();
+    if (keyWithSub && store[keyWithSub] && typeof store[keyWithSub] === 'object' && !Array.isArray(store[keyWithSub])) {
+        return store[keyWithSub];
+    }
+    if (legacyKey && store[legacyKey] && typeof store[legacyKey] === 'object' && !Array.isArray(store[legacyKey])) {
+        return store[legacyKey];
+    }
+    return null;
 }
 
 /**
@@ -346,9 +373,18 @@ export function overlayScriptExtras(script, kind, context) {
  */
 export function saveScriptExtras(script, kind, context) {
     if (!script || typeof script !== 'object') return script;
+    const ctx = context || getScriptFingerprintContext(kind);
+    const subHash = getScriptSubHash(script);
     const key = buildScriptFingerprint({
         kind,
-        ...(context || getScriptFingerprintContext(kind)),
+        ...ctx,
+        scriptName: script.scriptName,
+        findRegex: script.findRegex,
+        subHash,
+    });
+    const legacyKey = buildScriptFingerprint({
+        kind,
+        ...ctx,
         scriptName: script.scriptName,
         findRegex: script.findRegex,
     });
@@ -360,8 +396,13 @@ export function saveScriptExtras(script, kind, context) {
             const entry = {};
             for (const f of fields) entry[f] = cleaned[f];
             store[key] = entry;
+            // 清理旧格式无 subHash 键（若存在），防止陈旧脏数据
+            if (legacyKey && legacyKey !== key && store[legacyKey]) {
+                delete store[legacyKey];
+            }
         } else {
             delete store[key];
+            if (legacyKey && store[legacyKey]) delete store[legacyKey];
         }
     }
     for (const f of fields) delete cleaned[f];
@@ -377,15 +418,32 @@ export function saveScriptExtras(script, kind, context) {
  */
 export function clearScriptExtras(script, kind, context) {
     if (!script || typeof script !== 'object') return;
+    const ctx = context || getScriptFingerprintContext(kind);
+    const subHash = getScriptSubHash(script);
     const key = buildScriptFingerprint({
         kind,
-        ...(context || getScriptFingerprintContext(kind)),
+        ...ctx,
+        scriptName: script.scriptName,
+        findRegex: script.findRegex,
+        subHash,
+    });
+    const legacyKey = buildScriptFingerprint({
+        kind,
+        ...ctx,
         scriptName: script.scriptName,
         findRegex: script.findRegex,
     });
-    if (key) {
-        const store = getScriptExtrasStore();
+    const store = getScriptExtrasStore();
+    let changed = false;
+    if (key && store[key]) {
         delete store[key];
+        changed = true;
+    }
+    if (legacyKey && store[legacyKey]) {
+        delete store[legacyKey];
+        changed = true;
+    }
+    if (changed) {
         persistScriptExtrasStore(store);
     }
 }

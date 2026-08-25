@@ -386,6 +386,9 @@ export function syncAfterEdit(msg, newText) {
     delete msg.extra[GENERAL_KEY];
     delete msg.extra[DISPLAY_FP_KEY];
     delete msg.extra[FLAG_KEY];
+    delete msg.extra.display_text;
+    delete msg.extra.rph_template_body;
+    delete msg.extra.rph_template_display;
 }
 
 /**

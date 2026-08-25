@@ -67,29 +67,31 @@ export function djb2Hash(str) {
 
 /**
  * 构建脚本指纹 key（纯函数，node 可测）。
- * 原则：类型 + 稳定标识 + 脚本名 + findRegex hash —— 任一脚本内容变化才失配。
- *   - scoped（局部/存卡）：`scoped:<avatar>|<scriptName>|<findRegex hash>`
- *   - preset（存预设）：`preset:<presetName>|<scriptName>|<findRegex hash>`
- *   - global（不绑定卡）：`global:<scriptName>|<findRegex hash>`
+ * 原则：类型 + 稳定标识 + 脚本名 + findRegex hash + 次级消歧键（subHash / id / replaceString / index）。
+ *   - scoped（局部/存卡）：`scoped:<avatar>|<scriptName>|<findRegex hash>(|<subHash>)`
+ *   - preset（存预设）：`preset:<presetName>|<scriptName>|<findRegex hash>(|<subHash>)`
+ *   - global（不绑定卡）：`global:<scriptName>|<findRegex hash>(|<subHash>)`
  * @param {object} arg
  * @param {'scoped'|'preset'|'global'} arg.kind 脚本类型
  * @param {string} [arg.avatar] 卡 avatar（文件名；scoped 用）
  * @param {string} [arg.presetName] 预设名（preset 用）
  * @param {string} [arg.scriptName] 脚本名
  * @param {string} [arg.findRegex] findRegex（参与 hash）
+ * @param {string|number} [arg.subHash] 次级消歧标识（如 id、replaceString hash、数组下标）
  * @returns {string|null} 指纹 key；非法 kind / 缺 scriptName → null
  */
-export function buildScriptFingerprint({ kind, avatar = '', presetName = '', scriptName = '', findRegex = '' }) {
+export function buildScriptFingerprint({ kind, avatar = '', presetName = '', scriptName = '', findRegex = '', subHash = '' }) {
     const name = String(scriptName ?? '').trim();
     if (!name) return null;
     const hash = djb2Hash(findRegex);
+    const sub = subHash ? `|${String(subHash)}` : '';
     switch (kind) {
         case 'scoped':
-            return `scoped:${String(avatar ?? '')}|${name}|${hash}`;
+            return `scoped:${String(avatar ?? '')}|${name}|${hash}${sub}`;
         case 'preset':
-            return `preset:${String(presetName ?? '')}|${name}|${hash}`;
+            return `preset:${String(presetName ?? '')}|${name}|${hash}${sub}`;
         case 'global':
-            return `global:${name}|${hash}`;
+            return `global:${name}|${hash}${sub}`;
         default:
             return null;
     }

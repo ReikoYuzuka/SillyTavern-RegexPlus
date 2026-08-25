@@ -49,7 +49,7 @@ import { renderDisplayHtml } from './render.js';
 // content 段区间用流式定格结果（engineText）替换进正式引擎输出（成品在 .mes_text 正确位置，
 // 顺序 = 思维链 → content → 尾部）；STREAM_SKIP_CLASS 标记用于「已应用拼合」的幂等判定
 // （消除 RENDERED 二次全量重渲染）。单向依赖，stream-service 不 import display，无循环。
-import { spliceFinalizedSegments, STREAM_SKIP_CLASS } from '../stream/stream-service.js';
+import { spliceFinalizedSegments, waitForPendingStreamRenders, STREAM_SKIP_CLASS } from '../stream/stream-service.js';
 
 // 补丁 1d：最近一次 editRecovery/forceApply 强制写回的消息（供 rescanForIframe 补发的 RENDERED
 // 识别「本次 recompute 应跳过」—— 见 pure.shouldSkipRecoveryRecompute 注释）。
@@ -156,6 +156,12 @@ export async function coverMessage(messageId, { forceApply = false, editRecovery
 
     // 显示通道 HTML 围栏化模式判定（设计 §5 / 界面按钮点不动诊断.md 方案 A）：
     // 仅 rphub 模式启用（formatDetail=rphub 语义）；st 模式已在上方门控跳过。
+
+    // 流式在途渲染互斥等待（Drain Barrier）：等待指定消息的在途流式段渲染全部完成，
+    // 确保读取到完整的 finalizedSkipRegistry 数据后再执行拼合，消除竞态双重闪烁
+    if (typeof waitForPendingStreamRenders === 'function') {
+        await waitForPendingStreamRenders(messageId);
+    }
 
     let text;
     if (msg.extra?.rph_done && !forceApply) {
@@ -276,23 +282,20 @@ export async function onMessageSwiped(messageId) {
 export async function onMessageUpdated(messageId) {
     if (!runtime.active) return;
     const msg = runtime.chat[messageId];
-    // 强制写回：编辑重绘后 ST 用 mes（纯正文）渲染，重算结果与缓存 rph_display 一致会被
-    // recomputeDecision 跳过、不写 DOM → 界面消失。forceApply 绕开一致跳过，强制恢复显示。
-    // 补丁 1a：editRecovery 放宽 TH-render 守卫（ST 重建的中间态不是最终渲染）。
-    // 补丁 1c：写回围栏后补发 RENDERED，让酒馆助手重扫 iframe 化（消除「TH 先扫无围栏 DOM、
-    // 围栏写入后无人 iframe 化」的竞态 —— 问题 1「有时候」的第二来源）。
-    // 修复（编辑取消奇偶交替）：补发 RENDERED 从「嵌套同步发射」改为「setTimeout(0) 延时发射」——
-    // 嵌套发射发生在 MESSAGE_UPDATED 监听链中途，会与 cocktail html-render-cache 的
-    // makeLast restore（监听链最后一位）与 JSR audit 产生时序竞态（奇偶交替根因候选）；
-    // 延时后整个 MESSAGE_UPDATED 监听链（含 cocktail restore / JSR 先扫）先完成，
-    // 再对**最终 DOM** 补发 RENDERED 让 JSR 重扫 —— 确定性恢复显示。
-    // 修复（模板消息取消后不渲染，用户日志实证）：模板消息（rph_template_render）显示由第三部
-    // 渲染服务接管，取消后 ST 裸渲染 DOM=0/0，第三部渲染单条在 MESSAGE_UPDATED 一轮内可能
-    // 未走到重建（跳过分支的 重新断言DOM 依赖后续 RENDERED 收敛）——**无条件补发 RENDERED**
-    // 让第三部 eventMakeFirst 重处理（渲染单条 → 跳过 → 重新断言DOM → updateMessageBlock 重建 +
-    // 触发重扫描 → TH 补挂 iframe）；非模板消息仍走「未包裹前端 pre 才补发」守卫（避免无谓重扫）。
+    if (!msg) return;
+
+    // 区别判定：
+    // 若本条消息刚由 onMessageEdited 完成保存（rph_done 且 freshWriteAt 处于 800ms 新鲜窗口内），
+    // 说明新渲染已生成，无需以 forceApply: true 强刷旧缓存，走普通的 coverMessage 即可。
+    // 只有在非刚保存（如纯编辑取消）时，才需要 forceApply 强制恢复之前的引擎显示。
+    const isJustEdited = freshWriteMessageId === messageId && (Date.now() - freshWriteAt) < 800;
+
     debugEvent('onMessageUpdated:before', messageId);
-    await coverMessage(messageId, { forceApply: true, editRecovery: true });
+    if (isJustEdited) {
+        await coverMessage(messageId, { forceApply: false, editRecovery: true });
+    } else {
+        await coverMessage(messageId, { forceApply: true, editRecovery: true });
+    }
     debugEvent('onMessageUpdated:after-cover', messageId);
     // 补丁 1d：记录本次强制写回 —— 补发的 RENDERED 触发 onCharacterRendered 时跳过 recompute
     //（DOM 已是权威显示，避免宏非确定性重算覆盖缓存/破坏 TH iframe）。

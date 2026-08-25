@@ -724,14 +724,19 @@ export const DEFAULT_STREAM_MATCH = Object.freeze({
 /**
  * 单条标准标签对归一（纯函数，node 可测）：start/end 至少一个非空（单标签扩展，
  * 与 rp_preprocess collectPreprocessLocators 语义一致，engine.js:195-196）；均空 → null。
+ * match：锚定方向（贪婪匹配至末标签特性）。'last' ＝ 该规则的 start/end 在文中取「最后一次出现」；
+ * 缺省（省略字段）＝ 'first'（现行懒匹配）——旧存储值归一后不新增键，settings.json 逐字节向后兼容。
+ * ⚠️ 终结性约定：match:'last' 的规则为延迟闭合的终结性规则，吞并其后全部内容直至收尾
+ * （详见可行性分析《贪婪匹配至末标签》§2.4/§5.3）。
  * @param {*} rule 原始规则
- * @returns {{ start: string, end: string }|null}
+ * @returns {{ start: string, end: string, match?: 'last' }|null}
  */
 export function normalizeStreamTagRule(rule) {
     if (!rule || typeof rule !== 'object' || Array.isArray(rule)) return null;
     const start = String(rule.start ?? '').trim();
     const end = String(rule.end ?? '').trim();
     if (!start && !end) return null;
+    if (rule.match === 'last') return { start, end, match: 'last' };
     return { start, end };
 }
 
@@ -759,12 +764,18 @@ export function normalizeStreamRx(item) {
  * @returns {{ mode: 'basic'|'advanced', rules: Array<{start:string,end:string}>, rx: Array<{pattern:string}> }}
  */
 export function normalizeStreamMatch(value) {
+    // route：匹配作用（排除模式特性）。'include'（缺省）＝选中标签内容交 RP 引擎（现行语义）；
+    // 'exclude'＝选中标签区间保持原样交酒馆原生通道、其余内容交 RP 引擎。
+    const route = value && typeof value === 'object' && !Array.isArray(value) && value.route === 'exclude'
+        ? 'exclude'
+        : 'include';
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         // 缺失 → 内置默认（预填正文标签 <content>；深拷贝防共享引用被外部修改）
         return {
             mode: DEFAULT_STREAM_MATCH.mode,
             rules: DEFAULT_STREAM_MATCH.rules.map((r) => ({ ...r })),
             rx: [],
+            route,
         };
     }
     // mode 决定用哪组（与 rp_preprocess 的 mode 切换一致）：basic 只保留 rules、advanced 只保留 rx，
@@ -774,12 +785,14 @@ export function normalizeStreamMatch(value) {
             mode: STREAM_MATCH_MODE_ADVANCED,
             rules: [],
             rx: (Array.isArray(value.rx) ? value.rx.map(normalizeStreamRx).filter(Boolean) : []),
+            route,
         };
     }
     return {
         mode: STREAM_MATCH_MODE_BASIC,
         rules: (Array.isArray(value.rules) ? value.rules.map(normalizeStreamTagRule).filter(Boolean) : []),
         rx: [],
+        route,
     };
 }
 

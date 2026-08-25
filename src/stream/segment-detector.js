@@ -49,7 +49,13 @@ export function normalizeMatchConfig(match) {
     }
     const rules = (Array.isArray(match.rules) ? match.rules : [])
         .filter((r) => r && typeof r === 'object')
-        .map((r) => ({ start: String(r.start ?? ''), end: String(r.end ?? '') }))
+        .map((r) => ({
+            start: String(r.start ?? ''),
+            end: String(r.end ?? ''),
+            // match:'last' ＝ 该规则 start/end 在文中取「最后一次出现」（贪婪匹配至末标签）；
+            // 缺省/'first' ＝ 现行首个语义。⚠️ 终结性约定：'last' 规则延迟闭合，吞并其后全部内容。
+            ...(r.match === 'last' ? { match: 'last' } : {}),
+        }))
         .filter((r) => r.start || r.end);
     const rx = (Array.isArray(match.rx) ? match.rx : [])
         .filter((x) => x && typeof x === 'object')
@@ -140,7 +146,16 @@ export function createSegmentDetector({ match, prefix = '' } = {}) {
         const from = scanStart();
         config.rules.forEach((rule, ruleIndex) => {
             if (!rule.start) return;
-            const idx = buffer.indexOf(rule.start, from);
+            // match:'last' ＝ start 取文中最后一次出现（贪婪至末标签）；防御性向前跳过已处理位置
+            let idx;
+            if (rule.match === 'last') {
+                idx = buffer.lastIndexOf(rule.start);
+                while (idx !== -1 && handledStarts.has(idx)) {
+                    idx = idx > 0 ? buffer.lastIndexOf(rule.start, idx - 1) : -1;
+                }
+            } else {
+                idx = buffer.indexOf(rule.start, from);
+            }
             if (idx !== -1 && !handledStarts.has(idx) && (best === null || idx < best.index)) {
                 best = { ruleIndex, index: idx };
             }
@@ -148,9 +163,17 @@ export function createSegmentDetector({ match, prefix = '' } = {}) {
         return best;
     }
 
-    /** basic：找 rule 的闭合标签（回退窗口起，未处理）。返回 index 或 -1。 */
+    /** basic：找 rule 的闭合标签（回退窗口起，未处理）。返回 index 或 -1。
+     *  match:'last' ＝ 取文中最后一次出现（贪婪匹配至末标签；终结性规则，见模块头 JSDoc）。 */
     function findRuleEnd(rule) {
         if (!rule.end) return -1;
+        if (rule.match === 'last') {
+            let idx = buffer.lastIndexOf(rule.end);
+            while (idx !== -1 && handledStarts.has(idx)) {
+                idx = idx > 0 ? buffer.lastIndexOf(rule.end, idx - 1) : -1;
+            }
+            return idx;
+        }
         const from = scanStart();
         let idx = buffer.indexOf(rule.end, from);
         while (idx !== -1 && handledStarts.has(idx)) {
@@ -244,7 +267,12 @@ export function createSegmentDetector({ match, prefix = '' } = {}) {
                 break;
             } else if (state === SEGMENT_STATE_IN) {
                 const rule = config.rules[currentRuleIndex];
-                if (rule && rule.end) {
+                // match:'last'（贪婪至末标签）走【延迟闭合】："最后一个闭合"在收尾前不可知，
+                // 流式中途不产出 closed（否则退化为"当时最后一个"并提前终结接管）；段内
+                // 持续渲染照常（getInSegmentText 按当时 lastIndexOf(end) 截断预览），收口
+                // 由 forceClose 在 STOPPED/收尾时按 lastIndexOf 完成 —— 终结性：其后内容
+                // 不进本段，交回酒馆原生通道/正式链路。
+                if (rule && rule.end && rule.match !== 'last') {
                     const endIdx = findRuleEnd(rule);
                     if (endIdx !== -1) {
                         const segment = extractClosedSegment(rule, segmentStart, endIdx);
@@ -262,7 +290,8 @@ export function createSegmentDetector({ match, prefix = '' } = {}) {
                     scanFrom = buffer.length; // 未闭合：等更多 token（段内持续渲染由 getInSegmentText 提供）
                     break;
                 }
-                // 单开始规则（无 end）：段到末尾，永不闭合；等流式结束（P2 finalize 处理）
+                // 单开始规则（无 end）/ 贪婪规则（match:'last'）：段到末尾，流式中途永不闭合；
+                // 等流式结束或 STOPPED 由 forceClose 收口
                 scanFrom = buffer.length;
                 break;
             } else if (state === SEGMENT_STATE_CLOSED) {
@@ -308,7 +337,47 @@ export function createSegmentDetector({ match, prefix = '' } = {}) {
             if (state !== SEGMENT_STATE_IN || currentRuleIndex === null || segmentStart === -1) return null;
             const rule = config.rules[currentRuleIndex];
             if (!rule || !rule.start) return null;
+            // 贪婪规则（match:'last'）：段内预览按「当时最后一个闭合」截断——end 之后的
+            // 尾部不属于本段（收口后交回原生通道），预览与最终定格口径一致。
+            if (rule.match === 'last' && rule.end) {
+                const lastEnd = buffer.lastIndexOf(rule.end);
+                if (lastEnd >= segmentStart) {
+                    return buffer.slice(segmentStart, lastEnd + rule.end.length);
+                }
+            }
             return buffer.slice(segmentStart);
+        },
+        /** 强制闭合当前在途段（流式被用户中断/终止时调用，防止单标签或未闭合段退化为裸文本）。
+         *  match:'last' 规则：延迟闭合的收口点 —— 按「当时最后一次闭合」截断段体，
+         *  end 之后的内容不进本段（交回酒馆原生通道/正式链路），实现贪婪至末标签语义。 */
+        forceClose: () => {
+            if (state === SEGMENT_STATE_IN && currentRuleIndex !== null && segmentStart !== -1) {
+                let segment = buffer.slice(segmentStart);
+                const rule = config.rules[currentRuleIndex];
+                if (rule && rule.match === 'last' && rule.end) {
+                    // 贪婪收口：以当时最后一个闭合标签为段尾；其后的尾部（若有）留在段外
+                    const lastEnd = buffer.lastIndexOf(rule.end);
+                    if (lastEnd > segmentStart) {
+                        segment = buffer.slice(segmentStart, lastEnd + rule.end.length);
+                    }
+                    // lastEnd 不存在（尚未出现闭合）→ 维持整段打包（宁吞勿碎，与 first 行为一致）
+                }
+                if (segment.length > 0) {
+                    closedSegments.push(segment);
+                    const ev = {
+                        type: SEGMENT_EVENT_CLOSED,
+                        ruleIndex: currentRuleIndex,
+                        segment,
+                        occurrence: currentOccurrence,
+                    };
+                    state = SEGMENT_STATE_CLOSED;
+                    currentRuleIndex = null;
+                    segmentStart = -1;
+                    currentOccurrence = -1;
+                    return [ev];
+                }
+            }
+            return [];
         },
         isEmpty: () => isEmptyMatchConfig(config),
     };

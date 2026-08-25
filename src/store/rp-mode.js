@@ -231,6 +231,24 @@ function logDegrade(reason, characterName, formatDetail) {
     );
 }
 
+/** 计算角色卡头像图片的 SHA-256 哈希（hex 字符串） */
+async function computeAvatarHash(avatar, fetchImpl = fetch) {
+    if (!avatar || typeof avatar !== 'string') return null;
+    try {
+        const res = await fetchImpl(`/characters/${encodeURIComponent(avatar)}`);
+        if (!res.ok) return null;
+        const buf = await res.arrayBuffer();
+        if (typeof crypto !== 'undefined' && crypto.subtle?.digest) {
+            const hashBuf = await crypto.subtle.digest('SHA-256', buf);
+            const hashArr = Array.from(new Uint8Array(hashBuf));
+            return hashArr.map((b) => b.toString(16).padStart(2, '0')).join('');
+        }
+    } catch {
+        // 忽略
+    }
+    return null;
+}
+
 /**
  * 无缓存直接取（供 CHAT_CHANGED 后首次判定内部使用）。
  *
@@ -255,20 +273,42 @@ async function fetchCardInfo({ avatar, name, fetchImpl = fetch, degradeTarget = 
         logDegrade('no_content_hash', '（无角色）', formatDetail);
         return { formatDetail, contentHash: null, marked: false, reason: 'no_content_hash' };
     }
+    // 预先尝试计算本地 avatar 图片 hash，支持作为 query 参数透传后端
+    const localHash = await computeAvatarHash(avatar, fetchImpl);
+    const hashQuery = localHash ? `?contentHash=${encodeURIComponent(localHash)}` : '';
     try {
-        const res = await fetchImpl(`${BASE}/cards/by-name/${encodeURIComponent(characterName)}`);
+        const res = await fetchImpl(`${BASE}/cards/by-name/${encodeURIComponent(characterName)}${hashQuery}`);
         if (res.status === 404) {
+            // 兜底：如果直接查 marks 接口能查到本地 hash 的标记
+            if (localHash) {
+                try {
+                    const markRes = await fetchImpl(`${BASE}/marks/${encodeURIComponent(localHash)}`);
+                    if (markRes.ok) {
+                        const markData = await markRes.json();
+                        if (markData?.marked && markData?.mark?.type === 'rphub') {
+                            return {
+                                formatDetail: 'rphub',
+                                contentHash: localHash,
+                                marked: true,
+                                reason: 'ok',
+                            };
+                        }
+                    }
+                } catch {
+                    // 忽略
+                }
+            }
             const formatDetail = resolveDegradeMode({ degradeTarget });
             logDegrade('not_found', characterName, formatDetail);
-            return { formatDetail, contentHash: null, marked: false, reason: 'not_found' };
+            return { formatDetail, contentHash: localHash, marked: false, reason: 'not_found' };
         }
         if (!res.ok) {
             const formatDetail = resolveDegradeMode({ degradeTarget });
             logDegrade('unreachable', characterName, formatDetail);
-            return { formatDetail, contentHash: null, marked: false, reason: 'unreachable' };
+            return { formatDetail, contentHash: localHash, marked: false, reason: 'unreachable' };
         }
         const data = await res.json();
-        const contentHash = data?.contentHash ?? null;
+        const contentHash = data?.contentHash ?? localHash ?? null;
         // contentHash 应为 64 位十六进制（sha256）；缺失/非法 → 无法标记，视为降级路径
         const hashOk = typeof contentHash === 'string' && /^[0-9a-f]{64}$/.test(contentHash);
         const marked = data?.marked === true;
@@ -286,6 +326,6 @@ async function fetchCardInfo({ avatar, name, fetchImpl = fetch, degradeTarget = 
     } catch (err) {
         const formatDetail = resolveDegradeMode({ degradeTarget });
         logDegrade('unreachable', characterName, formatDetail);
-        return { formatDetail, contentHash: null, marked: false, reason: 'unreachable' };
+        return { formatDetail, contentHash: localHash, marked: false, reason: 'unreachable' };
     }
 }

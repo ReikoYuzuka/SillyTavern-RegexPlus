@@ -49,10 +49,21 @@
 import { injectTriggerBridge } from './trigger-bridge.js';
 
 /**
- * 完整 HTML 文档开头标记（任意位置检测，对齐原版 renderMarkdown 第一分支）：
- * `<!doctype html>` 或 `<html ...>`。注意 <html\b> 排除 <htmlx> 这类畸形标记。
+ * 完整 HTML 文档 / 界面片段开头标记（任意位置检测，对齐原版 renderMarkdown 第一分支）：
+ * `<!doctype html>` 或 `<html ...>`，并扩展支持 `<title>...<style>` 与带界面选择器的 `<style>` 片段。
+ *
+ * 【扩展来历与目标卡形态（修复方案验证报告 议题二 补记）】第 3/4 备选分支为 2026-02 修复轮
+ * 引入，无历史 commit/样例留档；按选择器指纹（.custom- / .panel / body{ / #mainPanel）推断，
+ * 目标是「正文之后的中段/尾部 CSS 交互面板」卡：AI 输出形如
+ *   `剧情正文…\n<style>.panel{…}.custom-x{…}</style><div class="panel custom-x">…按钮…</div>`
+ * 这类片段不在消息开头，既有的 FRAGMENT_STYLE_SCRIPT_RE（^\s*<style 开头）与
+ * isFragmentInterface（UI 标签开头+标记）都够不着 → 只能靠「任意位置」检测围栏化进 iframe。
+ * 若不围栏而走 ST 原生通道：CSS 经 encodeStyleTags→decodeStyleTags 以 `.mes_text ` 前缀
+ * 作用域化后仍会生效（外观保留），但 <script>/onclick 被剥、iframe 被剥 → 按钮点不动
+ * （本项目历史反复攻坚的症状），故保留检测（选项 b）而非回退（选项 a 会造成交互功能回归）。
+ * 配套约束：未闭合片段的吞尾边界见 unclosedFragmentRelEnd（修复 F2 中段吞正文）。
  */
-const FULL_HTML_MATCH_RE = /(<!doctype html>|<html\b[^>]*>)/i;
+export const FULL_HTML_MATCH_RE = /(<!doctype html>|<html\b[^>]*>|<title\b[^>]*>[\s\S]*?<\/title>\s*<style\b|<style\b[^>]*>[\s\S]*?(?:\.custom-|\.panel|body\s*\{|#mainPanel)[\s\S]*?<\/style>)/i;
 
 /**
  * HTML 界面片段开头特征：以 <style / <script / <iframe 开头（CSS/JS/iframe 容器）。
@@ -303,6 +314,82 @@ function escapeSrcdocEntities(html) {
     ));
 }
 
+/** raw-text 元素（内容不按标签解析，内部空行/换行不代表片段边界）。 */
+const RAW_TEXT_ELEMENT_RE = /^<\s*(style|script|textarea)\b/i;
+
+/**
+ * 计算下一个「标签外扫描」起点：普通标签跳过 token 本身；raw-text 元素（style/script/
+ * textarea）整体内容视为不透明 —— 直接跳到其闭合标签之后（CSS/JS 块内部的空行与换行
+ * 不得被误判为「片段结束边界」）。闭合缺失时跳到文末。
+ */
+function advancePastTag(tail, tagRe, m) {
+    if (!RAW_TEXT_ELEMENT_RE.test(m[0])) return tagRe.lastIndex;
+    const name = (m[0].match(/^<\s*([a-z]+)/i) || [])[1];
+    if (!name) return tagRe.lastIndex;
+    const closeIdx = tail.toLowerCase().indexOf('</' + name.toLowerCase(), tagRe.lastIndex);
+    if (closeIdx === -1) return tail.length;
+    const gt = tail.indexOf('>', closeIdx);
+    return gt === -1 ? tail.length : gt + 1;
+}
+
+/**
+ * 【标签之外】的文本区中寻找第一个空行（\n + 可选空白 + \n），返回其索引；找不到返回 -1。
+ * 迷你 tokenizer 跳过标签 token 与 raw-text 元素（style/script/textarea）整体内部 ——
+ * CSS 块内的空行不会误判为「片段结束」。局限：属性值里含 `>` 的畸形标签会切错位
+ * （可接受，远好于旧的 lastIndexOf/吞尾策略）。
+ */
+function findBlankLineOutsideTags(tail) {
+    const tagRe = /<[^>]*>/g;
+    let cursor = 0;
+    for (;;) {
+        const m = tagRe.exec(tail);
+        const seg = tail.slice(cursor, m ? m.index : tail.length);
+        const bm = seg.match(/\r?\n[ \t]*\r?\n/);
+        if (bm) return cursor + bm.index;
+        if (!m) return -1;
+        cursor = advancePastTag(tail, tagRe, m);
+    }
+}
+
+/** 【标签之外】的第一个换行（降级边界：无空行时切到行尾）；找不到返回 -1。 */
+function findLineBreakOutsideTags(tail) {
+    const tagRe = /<[^>]*>/g;
+    let cursor = 0;
+    for (;;) {
+        const m = tagRe.exec(tail);
+        const seg = tail.slice(cursor, m ? m.index : tail.length);
+        const lm = seg.match(/\r?\n/);
+        if (lm) return cursor + lm.index;
+        if (!m) return -1;
+        cursor = advancePastTag(tail, tagRe, m);
+    }
+}
+
+/**
+ * 未闭合 HTML 片段的吞尾终点计算（相对 tail 起点；修复 F2，选项 b）：
+ *   ① 标签外存在空行 → 围栏止于该空行前（片段之后的正文留在 markdown 流）；
+ *   ② 无空行但尾部以游离 </div> 序列结尾 → 沿用原「尾部剥离」补丁的切割点
+ *      （面板自带平衡闭合、EOF 结束的经典形态，行为与旧实现逐字节一致）；
+ *   ③ 标签外无空行但有换行 → 切到该行尾（紧凑输出降级：围栏止于当前块末尾）；
+ *   ④ 以上皆无（片段后无任何正文）→ 维持吞尾到文末（宁吞勿碎，避免半截围栏）。
+ * 主扫描器（fenceFullHtml）与 ``` 分支（fenceUnfencedFullDocs）共用本规则，消除双分支漂移。
+ * @param {string} tail 自片段起点到文本末尾的子串
+ * @returns {number} 相对 tail 起点的终点索引
+ */
+function unclosedFragmentRelEnd(tail) {
+    // ② 先保留旧「尾部游离 </div> 剥离」补丁：仅当它命中时优先（EOF 面板形态保持逐字节一致）
+    const trailingDivs = tail.match(/(\s*<\/div>)+$/i);
+    if (trailingDivs) return trailingDivs.index;
+    // ① 空行边界
+    const blankIdx = findBlankLineOutsideTags(tail);
+    if (blankIdx !== -1) return blankIdx;
+    // ③ 行尾降级
+    const lbIdx = findLineBreakOutsideTags(tail);
+    if (lbIdx !== -1) return lbIdx;
+    // ④ 宁吞勿碎
+    return tail.length;
+}
+
 /**
  * H4 修复：混合形态兜底 —— 文本已含 ``` 围栏时，旧短路分支只补空行，会漏掉
  * 「围栏区间之外的裸完整文档」。
@@ -351,7 +438,8 @@ function fenceUnfencedFullDocs(text) {
             待围栏.push({ start: gap.start, end: gap.end, type: 'fragment' });
             continue;
         }
-        // 3b. 裸完整文档 → 逐个围栏（从后往前处理，避免 index 偏移）
+        // 3b. 裸完整文档 → 逐个围栏（从后往前处理，避免 index 偏移）；
+        //     未闭合片段与主扫描器共用 unclosedFragmentRelEnd 边界（消除双分支漂移 N-L3）
         let seg = gapText;
         let offset = 0;
         while (seg.length > 0) {
@@ -359,11 +447,20 @@ function fenceUnfencedFullDocs(text) {
             if (!m) break;
             const relStart = m.index ?? 0;
             const relClose = seg.toLowerCase().indexOf('</html>', relStart);
-            if (relClose === -1) break;
-            const relEnd = relClose + '</html>'.length;
-            待围栏.push({ start: gap.start + offset + relStart, end: gap.start + offset + relEnd, type: 'doc' });
+            let relEnd;
+            let type;
+            if (relClose !== -1) {
+                relEnd = relClose + '</html>'.length;
+                type = 'doc';
+            } else {
+                // 未闭合片段 → 骨架围栏；边界规则与主扫描器一致
+                relEnd = relStart + unclosedFragmentRelEnd(seg.substring(relStart));
+                type = 'fragment';
+            }
+            待围栏.push({ start: gap.start + offset + relStart, end: gap.start + offset + relEnd, type });
             offset += relEnd;
             seg = seg.slice(relEnd);
+            if (type === 'fragment') break; // 与主扫描器一致：未闭合片段收尾后不再继续本 gap 扫描
         }
     }
     if (待围栏.length === 0) return str;
@@ -409,21 +506,82 @@ export function fenceFullHtml(text) {
         }
         return text;
     }
-    const startIndex = htmlMatch.index;
+
+    // 语义区间扫描器（Interval Range Scanner）：从前向后逐个扫描独立的 HTML 文档/片段区间
     const closeTag = '</html>';
-    const closeIndex = text.toLowerCase().lastIndexOf(closeTag);
-    const hasCloseTag = closeIndex !== -1 && closeIndex > startIndex;
-    const endIndex = hasCloseTag ? closeIndex + closeTag.length : text.length;
-    // srcdoc 双重实体转义（嵌套 iframe 状态栏修复，方向 A）：ST 管线层层打平后
-    // 恰好恢复为浏览器所需的单重实体，嵌套 srcdoc 不被裸引号截断。
-    const htmlContent = escapeSrcdocEntities(injectTriggerBridge(text.substring(startIndex, endIndex)));
-    let preText = text.substring(0, startIndex);
-    let postText = hasCloseTag ? text.substring(endIndex) : '';
-    // div 配平：pre 缺闭合 → 围栏前补；post 游离闭合 → 剥离（状态栏不被正文 div 吞）
-    ({ preText, postText } = balanceDivBeforeFence(preText, postText));
-    // 围栏前后必须补空行：marked 的 fenced code block 要求前后有空白行才识别为 <pre><code>，
-    // 否则 ``` 被当普通文本渲染（<p>```html</p>）→ 酒馆助手 isFrontend 扫不到 → 无 iframe。
-    return preText + '\n\n```html\n' + htmlContent + '\n```\n\n' + postText;
+    const docs = [];
+    let seg = text;
+    let offset = 0;
+
+    while (seg.length > 0) {
+        const m = seg.match(FULL_HTML_MATCH_RE);
+        if (!m) break;
+        const relStart = m.index ?? 0;
+        const relClose = seg.toLowerCase().indexOf(closeTag, relStart);
+
+        if (relClose !== -1) {
+            const relEnd = relClose + closeTag.length;
+            docs.push({
+                start: offset + relStart,
+                end: offset + relEnd,
+                hasCloseTag: true,
+            });
+            offset += relEnd;
+            seg = seg.slice(relEnd);
+        } else {
+            // 无 </html> 闭合的裸片段（如 <title>...<style>...<div class="custom-panel">...</div>）
+            // F2 修复：不再默认吞到文末 —— 用 unclosedFragmentRelEnd 的块级边界规则
+            // （①标签外空行 ②尾部游离 </div> 剥离 ③行尾降级 ④其后无正文维持吞尾），
+            // 使片段之后的剧情正文留在 markdown 流，同时保持 EOF 面板卡行为逐字节一致。
+            const relEnd = relStart + unclosedFragmentRelEnd(seg.substring(relStart));
+            docs.push({
+                start: offset + relStart,
+                end: offset + relEnd,
+                hasCloseTag: false,
+            });
+            offset += relEnd;
+            seg = seg.slice(relEnd);
+            break;
+        }
+    }
+
+    if (docs.length === 0) {
+        if (FRAGMENT_STYLE_SCRIPT_RE.test(text) || isFragmentInterface(text)) {
+            return 骨架围栏(text);
+        }
+        return text;
+    }
+
+    // 倒序对各个独立的 HTML 区间执行骨架包裹与围栏，保留各 HTML 块之间的 Markdown 正文
+    docs.sort((a, b) => b.start - a.start);
+    let out = text;
+
+    for (const doc of docs) {
+        const rawContent = out.substring(doc.start, doc.end);
+        let preText = out.substring(0, doc.start);
+        let postText = out.substring(doc.end);
+
+        // srcdoc 双重实体转义（嵌套 iframe 状态栏修复，方向 A）
+        let htmlContent = escapeSrcdocEntities(injectTriggerBridge(rawContent));
+
+        // 如果片段自身不含 <html>/<head>/<body>，自动补齐标准 HTML5 骨架
+        if (!FRONTEND_MARKER_RE.test(htmlContent)) {
+            htmlContent = `<!DOCTYPE html>\n<html>\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n</head>\n<body>\n${htmlContent}\n</body>\n</html>`;
+        }
+
+        // 空包裹 div 兜底与 div 配平
+        const 空div = preText.match(/(<div\b[^>]*>(?:<div\b[^>]*><\/div>|\s)*)$/);
+        if (空div) {
+            preText = preText.slice(0, 空div.index);
+            postText = postText.replace(/^\s*<\/div>/, '');
+        } else {
+            ({ preText, postText } = balanceDivBeforeFence(preText, postText));
+        }
+
+        out = preText + '\n\n```html\n' + htmlContent + '\n```\n\n' + postText;
+    }
+
+    return out;
 }
 
 /**

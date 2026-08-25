@@ -79,6 +79,9 @@ export function clearModeCache() {
 let presetRerenderTimer = null;
 const PRESET_RERENDER_DEBOUNCE_MS = 800;
 
+/** 分片广播代数计数器（用户连续切预设时作废旧广播）。 */
+let activeBroadcastToken = 0;
+
 /* ---------- SPreset 正则写入挂钩（切换样式自动重渲染，用户定稿方向） ----------
  * 背景（inject.js 实证）：SPreset（soliumbra 预设内置正则 v2 注入的 regex_bind/inject.js）
  * 切换样式 = `syncToST()` 整体赋值 `ctx.chatCompletionSettings.extensions.regex_scripts =
@@ -149,13 +152,17 @@ export function scheduleRerenderAfterPresetChange() {
 
 /** 清除挂起的预设变动重渲染（stop 时调用，防止扩展停止后仍执行）。 */
 export function cancelScheduledPresetRerender() {
+    activeBroadcastToken++; // 使在途分片广播失效
     if (presetRerenderTimer !== null) {
         clearTimeout(presetRerenderTimer);
         presetRerenderTimer = null;
     }
 }
 
-/** 预设变动全量重渲染：第二部 forceRerenderAll + 全量补发 RENDERED（对齐手动「强制重新渲染」按钮）。
+/** 预设变动全量重渲染：第二部 forceRerenderAll + rAF 分片补发 RENDERED（对齐手动「强制重新渲染」按钮）。
+ * 分片广播：每批 8 条，每批之间通过 requestAnimationFrame (或 setTimeout) 让出主线程，
+ * 避免一次性并发广播导致酒馆助手等扩展重建 iframe 冻结 UI。
+ * 结合 activeBroadcastToken 支持用户连续切换预设时自动作废旧广播。
  * 补发 RENDERED 的接收方：
  *   - 第三部渲染服务（eventMakeFirst）：模板消息用新鲜 rph_display 重渲染 display_text；
  *   - 酒馆助手 JSR audit：非模板消息的 ```html 围栏重新 iframe 化（forceRerenderAll 的
@@ -169,15 +176,41 @@ async function rerenderAllAfterPresetChange() {
         console.warn('[rp-hub-compat] 预设变动强制重渲染（第二部）失败：', String(error?.message || error));
     }
     const chat = getChatArray();
-    if (!Array.isArray(chat)) return;
+    if (!Array.isArray(chat) || chat.length === 0) return;
+
+    const currentToken = ++activeBroadcastToken;
+    const CHUNK_SIZE = 8;
+    const targets = [];
     for (let messageId = 0; messageId < chat.length; messageId++) {
         const msg = chat[messageId];
         if (!msg || msg.is_system) continue;
         if (msg.extra?.rph_done !== true) continue;
-        try {
-            eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, messageId, 'normal');
-        } catch { /* 事件不可用忽略（显示降级，下次事件收敛） */ }
+        targets.push(messageId);
     }
+
+    if (targets.length === 0) return;
+
+    let index = 0;
+    function dispatchChunk() {
+        if (currentToken !== activeBroadcastToken) return; // 令牌已失效（用户又切换了预设）
+        const end = Math.min(index + CHUNK_SIZE, targets.length);
+        for (; index < end; index++) {
+            const messageId = targets[index];
+            try {
+                eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, messageId, 'normal');
+            } catch { /* 事件不可用忽略 */ }
+        }
+        if (index < targets.length) {
+            if (typeof requestAnimationFrame === 'function') {
+                requestAnimationFrame(() => {
+                    if (currentToken === activeBroadcastToken) dispatchChunk();
+                });
+            } else {
+                setTimeout(dispatchChunk, 0);
+            }
+        }
+    }
+    dispatchChunk();
 }
 
 /**

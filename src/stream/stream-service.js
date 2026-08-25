@@ -55,6 +55,9 @@ import { event_types, eventSource, chatElement } from '../st-bridge.js';
 /** 段内持续渲染节流间隔（ms；M4：恢复节流持续更新，替代旧「只渲染一次」）。 */
 export const STREAM_THROTTLE_MS = 300;
 
+/** STOPPED 路径定格渲染落地封顶（ms）：< GENERATION_ENDED 的 2s 兜底定时器，规避兜底提前清理竞态。 */
+const FORCE_CLOSE_RENDER_CAP_MS = 400;
+
 /** 段容器 class（.mes 内 .mes_text 之后的兄弟节点；按 data-occurrence 区分多段）。 */
 export const STREAM_SEGMENT_CLASS = 'rph-stream-segment';
 
@@ -78,14 +81,41 @@ let renderTable = null;           // 内存段渲染表（createSegmentRenderTab
 let accumulated = '';             // 累计文本缓冲（M1：continue 前缀 + 事件累计文本）
 let messageIdKnown = false;       // 消息 id 是否已确定（首个 token 后为 true）
 let streamPrefix = '';            // continue 前缀基准（GENERATION_STARTED 计算；事件载荷拼接前缀后检测）
-let pendingRenders = 0;           // 在途段渲染计数（S1：闭合定格未完成时推迟清理，完成后补发 RENDERED 重拼合）
-let cleanupDeferred = false;      // onMessageRendered 因在途渲染推迟清理的标志（在途归零时处理）
+// 在-flight 渲染登记表（代际令牌模型，修复 F1）：每个 renderAndApply 在入口【同步区】登记
+// {gen, messageId} 令牌，finally 必达注销 —— 结构性消除「清理清零计数后在途自减为负」
+// （旧 pendingRenders 模型缺陷）与 hung-render 永久污染（悬挂令牌只属于旧代，被谓词过滤）。
+// 清理路径不再改写计数：cleanupActive/finalizeActive 的 generationSeq++ 即「作废旧代」全部动作。
+let inFlightRenders = [];         // 元素形如 { gen: number, messageId: number }
+/** 当前代指定消息是否还有在-flight 渲染（onMessageRendered 推迟 / Drain Barrier / finally 收尾共用谓词）。 */
+function hasInFlight(gen, messageId) {
+    const mid = Number(messageId);
+    return inFlightRenders.some((t) => t.gen === gen && t.messageId === mid);
+}
+/** 当前代指定消息在-flight 渲染个数（诊断日志用）。 */
+function countInFlight(gen, messageId) {
+    const mid = Number(messageId);
+    return inFlightRenders.filter((t) => t.gen === gen && t.messageId === mid).length;
+}
+/** 卫生措施：丢弃非当前代的悬挂令牌（hung render 永不注销时防堆积；对当前代语义无影响）。 */
+function sweepStaleInFlight() {
+    if (inFlightRenders.length > 0 && inFlightRenders.some((t) => t.gen !== generationSeq)) {
+        inFlightRenders = inFlightRenders.filter((t) => t.gen === generationSeq);
+    }
+}
+// 已作废消息 id 集合（N-E5 幽灵条目防线）：MESSAGE_DELETED/SWIPED/EDITED 已把该消息从渲染表
+// 删除但表对象尚存，在途渲染恢复后 renderTable.set 会把幽灵条目复活 —— 此处登记作废号，
+// 渲染恢复段复查后放弃回写。cleanupActive/finalizeActive 整表清空。
+const invalidatedMessages = new Set();
+let cleanupDeferred = false;      // onMessageRendered 因在途渲染推迟清理的标志（本代本消息在途归零时处理）
 let recoverScheduled = false;     // 补发 RENDERED 的防重入标志
 let cleanupTimer = null;          // GENERATION_ENDED 兜底清理定时器（错误路径无 RENDERED 时兜底）
 let cleanupTimerMessageId = null; // 兜底定时器绑定的消息 id（防误清新生成状态）
 let activeMode = null;            // 当前角色模式（硬约束 1：仅 'rphub' 才介入流式渲染；null/其它 = 不介入）
+let activeRoute = 'include';      // 匹配作用（排除模式特性）：'include'＝选中标签交 RP（现行）；'exclude'＝选中标签区间交酒馆原生（流式层丢弃事件，不渲染不定格）
 let generationSeq = 0;            // 生成代际计数（异步模式解析竞态守卫：清理/新生成时推进使在途解析失效）
 let finalizedSkipRegistry = new Map(); // 定格段注册表（问题 3 方案 A：跨生成存活，供后续 coverMessage 跳过决策）
+let isPerformingDomSurgery = false; // 静默操作标志位（Quiet Flag Gate：内部 DOM 手术时置 true，Observer 首行直接跳过）
+let observerRafPending = false;    // Observer 合并 rAF 标志位，防止高频 Token 下级联微顿
 
 /* ---------- 完整记录器（诊断：记录每一步渲染流程到 window.__rphStreamLog） ---------- */
 
@@ -216,84 +246,97 @@ function getMesTextElement(messageId) {
  * @param {boolean} [quiet] 静默模式（observer 每帧调用，跳过逐帧日志，L3 性能）
  * @returns {boolean} 是否执行了隐藏（找不到边界 → false）
  */
-function hideSegmentRange($mesText, { startTag = '', endTag = '', raw = '', occurrence = 0, closed = false } = {}, quiet = false) {
+function hideSegmentRange($mesText, { startTag = '', endTag = '', raw = '', occurrence = 0, closed = false, match = '' } = {}, quiet = false) {
     if (!$mesText || !$mesText.length) return false;
-    const container = $mesText[0];
-    const full = container.textContent ?? '';
-    let startIdx = -1;
-    let endIdx = -1;
+    isPerformingDomSurgery = true;
+    try {
+        const container = $mesText[0];
+        const full = container.textContent ?? '';
+        let startIdx = -1;
+        let endIdx = -1;
 
-    // 策略 1：标签定位（原始或转义变体；occurrence 定位第 N 段）
-    if (startTag || endTag) {
-        if (startTag) {
-            const s = nthIndexOf(full, startTag, occurrence + 1);
-            if (s !== -1) startIdx = s;
-        } else {
-            startIdx = 0; // 单闭合标签：段起点在消息开头
-        }
-        if (endTag) {
-            const from = startIdx >= 0 ? startIdx + (startTag ? startTag.length : 0) : 0;
-            const e = nthIndexOf(full, endTag, occurrence + 1, from);
-            if (e !== -1) endIdx = e + endTag.length;
-        } else if (startIdx >= 0) {
-            endIdx = full.length; // 无闭合 → 当前末尾
-        }
-        // 标签定位成功（startIdx 和 endIdx 都有效）→ 用之（块级隐藏优先，文本手术兜底）
-        if (startIdx >= 0 && endIdx > startIdx) {
-            const r = hideRangeByBlocks(container, startIdx, endIdx);
-            if (r === 'already') return false; // 本帧已块级隐藏 → 早退（防自触发二轮）
-            if (r === true) return true;
-            return hideRangeInDom(container, full, startIdx, endIdx);
-        }
-        if (!quiet) logStream('hide-range', { summary: `标签定位失败 startIdx=${startIdx} endIdx=${endIdx}（.mes_text 内无标签）`, ok: false, startIdx, endIdx });
-    }
-
-    // 策略 2：正文内容定位兜底（标签被 ST 剥离时）—— 空白归一匹配（补丁项：修 head 过短/换行失配）。
-    if (raw && startTag) {
-        const innerStart = raw.indexOf(startTag);
-        if (innerStart !== -1) {
-            let inner = raw.slice(innerStart + startTag.length);
-            if (endTag) {
-                const ie = inner.indexOf(endTag);
-                if (ie !== -1) inner = inner.slice(0, ie);
+        // 策略 1：标签定位（原始或转义变体；occurrence 定位第 N 段）。
+        // match==='last'（贪婪匹配至末标签）：start/end 定位改用「最后一次出现」口径，
+        // 与段容器内容（贪婪段吞到文末最后一个闭合）保持一致 —— 否则隐藏范围只到首个
+        // 闭合标签，中间原文残留可见。
+        if (startTag || endTag) {
+            if (startTag) {
+                const s = match === 'last' ? full.lastIndexOf(startTag) : nthIndexOf(full, startTag, occurrence + 1);
+                if (s !== -1) startIdx = s;
+            } else {
+                startIdx = 0; // 单闭合标签：段起点在消息开头
             }
-            const trimmed = inner.trim();
-            if (trimmed.length > 0) {
-                // 开头片段：前 12 字符（归一匹配处理换行/折叠空白）；过短（<3）则整段作锚
-                const head = trimmed.slice(0, 12).length >= 3 ? trimmed.slice(0, 12) : trimmed;
-                const idx = nthNormalizedIndexOf(full, head, occurrence + 1);
-                if (idx !== -1) {
-                    // 段结束：有闭合标签 → 找闭合后的位置；无（IN 态）→ 当前末尾；
-                    // 闭合标签被剥离（M6）→ 用正文尾部片段定位段终点（尾部保留）
-                    let endIdx2 = full.length;
-                    if (endTag) {
-                        const closeIdx = full.indexOf(endTag, idx);
-                        if (closeIdx !== -1) {
-                            endIdx2 = closeIdx + endTag.length;
-                        } else if (closed) {
-                            const tail = trimmed.slice(-12).trim();
-                            if (tail.length > 0) {
-                                const tIdx = nthNormalizedIndexOf(full, tail, occurrence + 1, idx + 1);
-                                endIdx2 = tIdx !== -1 && tIdx > idx
-                                    ? Math.min(full.length, tIdx + tail.length)
-                                    : Math.min(full.length, idx + trimmed.length);
-                            } else {
-                                endIdx2 = Math.min(full.length, idx + trimmed.length);
+            if (endTag) {
+                if (match === 'last') {
+                    const e = full.lastIndexOf(endTag);
+                    if (e !== -1 && e >= startIdx) endIdx = e + endTag.length;
+                } else {
+                    const from = startIdx >= 0 ? startIdx + (startTag ? startTag.length : 0) : 0;
+                    const e = nthIndexOf(full, endTag, occurrence + 1, from);
+                    if (e !== -1) endIdx = e + endTag.length;
+                }
+            } else if (startIdx >= 0) {
+                endIdx = full.length; // 无闭合 → 当前末尾
+            }
+            // 标签定位成功（startIdx 和 endIdx 都有效）→ 用之（块级隐藏优先，文本手术兜底）
+            if (startIdx >= 0 && endIdx > startIdx) {
+                const r = hideRangeByBlocks(container, startIdx, endIdx);
+                if (r === 'already') return false; // 本帧已块级隐藏 → 早退（防自触发二轮）
+                if (r === true) return true;
+                return hideRangeInDom(container, full, startIdx, endIdx);
+            }
+            if (!quiet) logStream('hide-range', { summary: `标签定位失败 startIdx=${startIdx} endIdx=${endIdx}（.mes_text 内无标签）`, ok: false, startIdx, endIdx });
+        }
+
+        // 策略 2：正文内容定位兜底（标签被 ST 剥离时）—— 空白归一匹配（补丁项：修 head 过短/换行失配）。
+        if (raw && startTag) {
+            const innerStart = raw.indexOf(startTag);
+            if (innerStart !== -1) {
+                let inner = raw.slice(innerStart + startTag.length);
+                if (endTag) {
+                    const ie = inner.indexOf(endTag);
+                    if (ie !== -1) inner = inner.slice(0, ie);
+                }
+                const trimmed = inner.trim();
+                if (trimmed.length > 0) {
+                    // 开头片段：前 12 字符（归一匹配处理换行/折叠空白）；过短（<3）则整段作锚
+                    const head = trimmed.slice(0, 12).length >= 3 ? trimmed.slice(0, 12) : trimmed;
+                    const idx = nthNormalizedIndexOf(full, head, occurrence + 1);
+                    if (idx !== -1) {
+                        // 段结束：有闭合标签 → 找闭合后的位置；无（IN 态）→ 当前末尾；
+                        // 闭合标签被剥离（M6）→ 用正文尾部片段定位段终点（尾部保留）
+                        let endIdx2 = full.length;
+                        if (endTag) {
+                            const closeIdx = full.indexOf(endTag, idx);
+                            if (closeIdx !== -1) {
+                                endIdx2 = closeIdx + endTag.length;
+                            } else if (closed) {
+                                const tail = trimmed.slice(-12).trim();
+                                if (tail.length > 0) {
+                                    const tIdx = nthNormalizedIndexOf(full, tail, occurrence + 1, idx + 1);
+                                    endIdx2 = tIdx !== -1 && tIdx > idx
+                                        ? Math.min(full.length, tIdx + tail.length)
+                                        : Math.min(full.length, idx + trimmed.length);
+                                } else {
+                                    endIdx2 = Math.min(full.length, idx + trimmed.length);
+                                }
                             }
                         }
+                        if (endIdx2 > idx) {
+                            const r = hideRangeByBlocks(container, idx, endIdx2);
+                            if (r === 'already') return false; // 本帧已块级隐藏 → 早退（防自触发二轮）
+                            if (r === true) return true;
+                            return hideRangeInDom(container, full, idx, endIdx2);
+                        }
                     }
-                    if (endIdx2 > idx) {
-                        const r = hideRangeByBlocks(container, idx, endIdx2);
-                        if (r === 'already') return false; // 本帧已块级隐藏 → 早退（防自触发二轮）
-                        if (r === true) return true;
-                        return hideRangeInDom(container, full, idx, endIdx2);
-                    }
+                    if (!quiet) logStream('hide-range', { summary: `内容定位失败 head=${JSON.stringify(head)} idx=${idx}（.mes_text 内无该正文开头）`, ok: false, head, idx });
                 }
-                if (!quiet) logStream('hide-range', { summary: `内容定位失败 head=${JSON.stringify(head)} idx=${idx}（.mes_text 内无该正文开头）`, ok: false, head, idx });
             }
         }
+        return false;
+    } finally {
+        isPerformingDomSurgery = false;
     }
-    return false;
 }
 
 /* ---------- 块级隐藏（问题 2 方案 B：content 段区域整段 display:none） ---------- */
@@ -426,14 +469,15 @@ function hideRangeInDom(container, full, startIdx, endIdx) {
  * @param {string} raw 段原始文本（含标签整串；内容定位隐藏用）
  * @param {number} occurrence 段出现序号
  * @param {boolean} closed 是否闭合定格（M6：闭合后隐藏范围止于正文末尾）
+ * @param {string} [match] 锚定方向（贪婪匹配至末标签）：'last' ＝ 原文隐藏定位取最后一次出现
  */
-function applyStreamDom(messageId, html, startTag, endTag, raw, occurrence = 0, closed = false) {
+function applyStreamDom(messageId, html, startTag, endTag, raw, occurrence = 0, closed = false, match = '') {
     const $mesText = getMesTextElement(messageId);
     if (!$mesText || !$mesText.length) return false;
     if (isEditingDom($mesText)) return false;
     // 1. 隐藏原文段区域（标准模式标签对；raw 供内容定位兜底）
     let hidden = false;
-    if (startTag || endTag) hidden = hideSegmentRange($mesText, { startTag, endTag, raw, occurrence, closed });
+    if (startTag || endTag) hidden = hideSegmentRange($mesText, { startTag, endTag, raw, occurrence, closed, match });
     // 2. 兄弟节点渲染结果（.mes 内 .mes_text 之后；幂等）
     const mesEl = $mesText[0].parentElement;
     if (!mesEl) return hidden;
@@ -515,7 +559,11 @@ function currentTagRules() {
  */
 async function renderAndApply(segmentText, messageId, segmentType, ruleIndex, occurrence = 0) {
     if (!segmentText) return;
-    pendingRenders++;
+    // 代际令牌捕获必须在本函数首个 await 之前（同步区）：此后 cleanup 推进 generationSeq 也不会误标自己。
+    const myGen = generationSeq;
+    const myMid = Number(messageId);
+    const myToken = { gen: myGen, messageId: myMid };
+    inFlightRenders.push(myToken);
     let settled = false;
     try {
         // 标签信息：basic 模式按 ruleIndex 取当前规则；advanced 无标签 → 直接整段
@@ -549,13 +597,28 @@ async function renderAndApply(segmentText, messageId, segmentType, ruleIndex, oc
         console.debug(`[rp-hub-compat] 流式段渲染完成：via=${out.via} html前40字=${JSON.stringify(out.html.slice(0, 40))}`);
         // SR2 修复：停止/切聊竞态下 renderTable 可能已被置 null → 判空防御（避免 NPE 被吞）
         if (!renderTable) return;
+        // R1 跨代替换防线：本渲染若登记于旧代（期间发生 cleanupActive/finalizeActive 推进代际），
+        // 其结果不得写入当前注册表——否则会以同 (segmentType, occurrence) 原地顶替新一代条目，
+        // 最终拼合显示上一代中断文本（实验 B7/B10 实证）。验证报告原列为"非必需"，实验后升级为必需。
+        if (myGen !== generationSeq) {
+            console.debug(`[rp-hub-compat] 流式段渲染作废：代际已推进（渲染时 ${myGen}，当前 ${generationSeq}），放弃回写。`);
+            return;
+        }
+        // N-E5 幽灵条目防线：消息已被删除/swipe/edit 作废（渲染表条目已删但表对象尚存）→
+        // 不得把条目写回渲染表或向其 DOM 回插，否则复活幽灵段。
+        if (invalidatedMessages.has(myMid)) {
+            console.debug(`[rp-hub-compat] 流式段渲染作废：消息 #${myMid} 已被删除/切换，放弃回写。`);
+            return;
+        }
         // raw 保留含标签整串（供原文内容定位隐藏）；engineText 供正式链路拼合（S1）
+        const matchMode = rule?.match === 'last' ? 'last' : '';
         renderTable.set(messageId, segmentType, out.html, segmentText, {
             startTag, endTag, occurrence,
             engineText: out.engineText,
             closed: segmentType !== 'in',
+            match: matchMode, // 贪婪匹配至末标签：原文隐藏定位需同口径（last）
         });
-        const hidden = applyStreamDom(messageId, out.html, startTag, endTag, segmentText, occurrence, segmentType !== 'in');
+        const hidden = applyStreamDom(messageId, out.html, startTag, endTag, segmentText, occurrence, segmentType !== 'in', matchMode);
         console.debug(`[rp-hub-compat] 流式 DOM 回插：occ=${occurrence} segs节点更新，原文隐藏=${hidden ? '是' : '否'}（.mes_text 内按${startTag || '内容'}定位）`);
         logStream('render', {
             summary: `type=${segmentType} occ=${occurrence} hidden=${hidden ? '是' : '否'} via=${out.via}`,
@@ -566,21 +629,27 @@ async function renderAndApply(segmentText, messageId, segmentType, ruleIndex, oc
         });
         settled = true;
     } finally {
-        pendingRenders--;
+        // 注销自身令牌（必达；代际令牌模型下结构性不可能负数/漏减）
+        const tokenIdx = inFlightRenders.indexOf(myToken);
+        if (tokenIdx !== -1) inFlightRenders.splice(tokenIdx, 1);
         if (settled && segmentType !== 'in') maybeScheduleRecover(messageId);
-        // 清理推迟处理：在途渲染归零时 —— 若含闭合定格则 maybeScheduleRecover 已排定补发
+        // 清理推迟处理（谓词 = 本代本消息在途归零）：若含闭合定格则 maybeScheduleRecover 已排定补发
         // （其 RENDERED 会走 onMessageRendered 收尾）；否则（全为段内渲染）正式覆盖已完成、
         // 无跳过/拼合需求 → 直接 finalizeActive（问题 3 方案 A：保留定格成品，防泄漏）
-        if (pendingRenders === 0 && cleanupDeferred) {
+        if (cleanupDeferred && !hasInFlight(generationSeq, myMid)) {
             cleanupDeferred = false;
             if (!recoverScheduled) finalizeActive();
         }
     }
 }
 
-/** 处理一次段检测结果（events + 段内文本）。节流门控在 onStreamToken（段内持续渲染）。 */
+/** 处理一次段检测结果（events + 段内文本）。节流门控在 onStreamToken（段内持续渲染）。
+ *  排除模式（activeRoute==='exclude'）：检出的区间保持原样交酒馆原生通道 —— 本函数整体
+ *  短路（不 renderAndApply / 不定格 / 不入表 / 不产令牌）；正式链路由 runtime 把排除规则
+ *  转译为附加 cleanRules（藏走原样拼回）完成"区间内不进 RP 引擎"。 */
 async function processDetection(feed) {
     if (!activeDetector || activeMessageId === null) return;
+    if (activeRoute === 'exclude') return; // 排除模式：流式层零动作
     // 闭合事件 → 立即定格渲染（用户方案：闭合后停止传 RP，尾部交回原版）
     for (const ev of feed.events) {
         if (ev.type === SEGMENT_EVENT_CLOSED) {
@@ -665,13 +734,14 @@ async function resolveStreamMode(type, mySeq) {
         return;
     }
     const match = getStreamMatch();
+    activeRoute = match.route === 'exclude' ? 'exclude' : 'include'; // 排除模式路由（本代生效）
     streamPrefix = computeContinuePrefix(type, match); // M1
     activeDetector = createSegmentDetector({ match, prefix: streamPrefix });
     renderTable = createSegmentRenderTable();
     accumulated = '';
     messageIdKnown = false;
     lastRenderAt = 0;
-    console.debug(`[rp-hub-compat] 流式实时渲染：生成开始（rphub 卡，匹配模式=${match.mode}${streamPrefix ? '，含 continue 前缀' : ''}，等首个 token 确定消息）`);
+    console.debug(`[rp-hub-compat] 流式实时渲染：生成开始（rphub 卡，匹配模式=${match.mode}${match.route === 'exclude' ? '/排除作用' : ''}${streamPrefix ? '，含 continue 前缀' : ''}，等首个 token 确定消息）`);
 }
 
 /** M1：continue 场景的前缀基准 —— 旧消息最后一个标签边界之后的内容。
@@ -760,9 +830,12 @@ function onStreamToken(incrementalText) {
 
 /** 流式结束 / 中断：清理临时 DOM 与段渲染表（正式链路 coverMessage 已跳过/覆盖）。
  * 注意：本函数**不**清 finalizedSkipRegistry（定格段注册表跨生成存活，供后续 coverMessage
- * 跳过决策；由 onStopOrChatChanged / MESSAGE_SWIPED / MESSAGE_EDITED / MESSAGE_DELETED 显式清）。 */
+ * 跳过决策；由停止/切聊处理器 / MESSAGE_SWIPED / MESSAGE_EDITED / MESSAGE_DELETED 显式清）。
+ * 代际令牌模型：本函数【不改写任何渲染计数】—— generationSeq++ 即作废旧代，
+ * 在途旧代渲染的令牌由 sweepStaleInFlight 丢弃、其 DOM 写入被 renderTable=null 卫警拦截。 */
 function cleanupActive() {
-    generationSeq++; // 使在途 resolveStreamMode 失效（竞态守卫）
+    generationSeq++; // 使在途 resolveStreamMode 失效（竞态守卫）；同时作废旧代渲染令牌
+    sweepStaleInFlight(); // 卫生：丢弃旧代悬挂令牌（hung render 防堆积）
     if (cleanupTimer) {
         clearTimeout(cleanupTimer);
         cleanupTimer = null;
@@ -778,10 +851,11 @@ function cleanupActive() {
     accumulated = '';
     streamPrefix = '';
     messageIdKnown = false;
-    pendingRenders = 0;
+    invalidatedMessages.clear();
     cleanupDeferred = false;
     recoverScheduled = false;
     activeMode = null;
+    activeRoute = 'include';
 }
 
 /**
@@ -794,7 +868,8 @@ function cleanupActive() {
  *   - 还原隐藏标记（隐藏 span/块）；重置全部瞬态。
  */
 function finalizeActive() {
-    generationSeq++; // 使在途 resolveStreamMode 失效
+    generationSeq++; // 使在途 resolveStreamMode 失效；同时作废旧代渲染令牌
+    sweepStaleInFlight(); // 卫生：丢弃旧代悬挂令牌
     if (cleanupTimer) {
         clearTimeout(cleanupTimer);
         cleanupTimer = null;
@@ -820,10 +895,11 @@ function finalizeActive() {
     accumulated = '';
     streamPrefix = '';
     messageIdKnown = false;
-    pendingRenders = 0;
+    invalidatedMessages.clear();
     cleanupDeferred = false;
     recoverScheduled = false;
     activeMode = null;
+    activeRoute = 'include';
 }
 
 /**
@@ -831,7 +907,7 @@ function finalizeActive() {
  * 方向 A 拼合：先正式（coverMessage 已跑，content 已拼进 .mes_text）、后清理 ——
  * finalizeActive 删除兄弟容器 + 登记定格段注册表。
  * 在途段渲染（闭合定格未完成）→ 推迟 —— 在途渲染完成后会补发 RENDERED，coverMessage
- * 用最新定格结果拼合，随后本函数（pendingRenders=0）再 finalizeActive。
+ * 用最新定格结果拼合，随后本函数（本代本消息在途归零）再 finalizeActive。
  */
 function onMessageRendered(messageId) {
     if (!started) return;
@@ -841,9 +917,10 @@ function onMessageRendered(messageId) {
         cleanupTimerMessageId = null;
     }
     if (Number(messageId) !== activeMessageId) return;
-    if (pendingRenders > 0) {
+    // 代际令牌谓词：只统计【当前代、本消息】的在途渲染 —— 旧代悬挂令牌不再误触发推迟/收尾
+    if (hasInFlight(generationSeq, messageId)) {
         cleanupDeferred = true;
-        console.debug(`[rp-hub-compat] 流式实时渲染：在途段渲染 ${pendingRenders} 个 → 推迟收尾（等待定格后补发 RENDERED 重跳过）。`);
+        console.debug(`[rp-hub-compat] 流式实时渲染：在途段渲染 ${countInFlight(generationSeq, messageId)} 个 → 推迟收尾（等待定格后补发 RENDERED 重跳过）。`);
         return;
     }
     finalizeActive();
@@ -852,6 +929,7 @@ function onMessageRendered(messageId) {
 /** MESSAGE_DELETED：删除消息 → 清理对应临时 DOM、段渲染表与定格注册表。 */
 function onMessageDeleted(messageId) {
     if (!started) return;
+    invalidatedMessages.add(Number(messageId)); // N-E5：标记作废，在途渲染不得回写幽灵条目
     cleanupMessageDom(messageId);
     if (renderTable) renderTable.delete(messageId);
     finalizedSkipRegistry.delete(Number(messageId));
@@ -860,19 +938,79 @@ function onMessageDeleted(messageId) {
     }
 }
 
-/** CHAT_CHANGED / GENERATION_STOPPED：切换/停止 → 清定格注册表 + 清理全部临时状态。
- * 聊天切换后 DOM 整体重建（旧容器已随 DOM 消失），注册表若不清会导致后续 cover 跳过
- * 一个没有容器的段 → content 丢失；停止后正式链路会全量渲染（内容回到 .mes_text）。 */
-function onStopOrChatChanged() {
+/**
+ * GENERATION_STOPPED（用户停止生成）：forceClose 定格渲染【先落地】再清理 —— 修复 F3
+ * （旧实现 void 调度后同步清理，定格渲染被 renderTable=null 卫警丢弃，承诺落空）。
+ *
+ * 分事件策略（验证报告议题三）：STOPPED 时目标消息仍在屏幕上，定格有展示价值 →
+ * await 渲染落地后再收尾；用 Promise.race 封顶（FORCE_CLOSE_RENDER_CAP_MS <
+ * GENERATION_ENDED 的 2s 兜底定时器，天然规避兜底提前清理把定格撕裂的竞态）。
+ *
+ * 再入守卫：入口捕获当前代（myGen），每个 await 恢复后若代际已被推进
+ * （新一代 GENERATION_STARTED / 他处清理先行），放弃本次收尾，让最新调用链全权负责。
+ */
+async function onGenerationStopped() {
     if (!started) return;
+    const myGen = generationSeq; // 再入守卫基准（与代际令牌同源）
+    // 排除模式路由过滤：检出的区间该交原版，不定格渲染进 DOM（否则恰与用户意图相反）；
+    // forceClose 亦跳过 —— 检测器随 cleanupActive 丢弃，无状态机残留。
+    if (activeRoute !== 'exclude') {
+        await flushForcedCloseRenders();
+    }
+    if (myGen !== generationSeq) return; // 代际已推进 → 本次收尾作废
     finalizedSkipRegistry.clear();
     cleanupActive();
+}
+
+/**
+ * CHAT_CHANGED（切换聊天/角色）：跳过定格渲染，直接闭合状态机 + 清理。
+ * 旧聊天 DOM 正被销毁/重建、mesid 可能被新聊天复用 —— 向其写入是浪费且有串扰风险；
+ * 内容回填由切换后的正式链路全量渲染接管（等效旧实现的最终效果：内容回到 .mes_text）。
+ */
+function onChatChanged() {
+    if (!started) return;
+    if (activeDetector && typeof activeDetector.forceClose === 'function') {
+        try { activeDetector.forceClose(); } catch { /* 状态机仍尽力闭合；不阻断清理 */ }
+    }
+    finalizedSkipRegistry.clear();
+    cleanupActive();
+}
+
+/**
+ * 消费检测器的强制闭合事件并等待定格渲染落地（仅 STOPPED 路径调用）。
+ * try/catch 全覆盖，替代旧 `void renderAndApply(...)` 的 unhandled rejection 面；
+ * race 封顶保证「停止」交互反馈不被慢渲染拖住（超时后孤儿渲染由代际令牌/卫生兵安全作废）。
+ */
+async function flushForcedCloseRenders() {
+    if (!activeDetector || typeof activeDetector.forceClose !== 'function') return;
+    let evs = [];
+    try {
+        evs = activeDetector.forceClose() || [];
+    } catch { /* forceClose 异常不阻断清理 */ }
+    if (!Array.isArray(evs) || evs.length === 0 || activeMessageId === null) return;
+    const targetMid = activeMessageId;
+    const work = (async () => {
+        for (const ev of evs) {
+            await renderAndApply(ev.segment, targetMid, `closed-${ev.ruleIndex}`, ev.ruleIndex, ev.occurrence ?? 0);
+        }
+    })();
+    // R3 兜底：Promise.race 会同时挂接两侧回调——封顶后才落定的失败既不会走外层 catch
+    // （race 已消化）也不产生 unhandled rejection，形成"静默无日志"的排障盲区（实验 B9c 实证）。
+    // 统一在此记录（无论封顶前后失败）；loggedWork 永不 reject，race 不会因此提前拒绝。
+    const loggedWork = work.catch((err) => {
+        console.warn('[rp-hub-compat] 中断定格渲染失败：', String(err?.message || err));
+    });
+    await Promise.race([
+        loggedWork,
+        new Promise((resolve) => setTimeout(resolve, FORCE_CLOSE_RENDER_CAP_MS)),
+    ]);
 }
 
 /** MESSAGE_SWIPED：浏览到其它 swipe → 本消息定格段作废（容器/渲染表/注册表清理），
  * 正式链路对新的 swipe 全量渲染（不跳过）。 */
 function onMessageSwiped(messageId) {
     if (!started) return;
+    invalidatedMessages.add(Number(messageId)); // N-E5：标记作废，在途渲染不得回写幽灵条目
     cleanupMessageDom(messageId);
     if (renderTable) renderTable.delete(messageId);
     finalizedSkipRegistry.delete(Number(messageId));
@@ -882,6 +1020,7 @@ function onMessageSwiped(messageId) {
 /** MESSAGE_EDITED：编辑保存 → 同 swipe（定格段作废，正式链路全量渲染编辑后文本）。 */
 function onMessageEdited(messageId) {
     if (!started) return;
+    invalidatedMessages.add(Number(messageId)); // N-E5：标记作废，在途渲染不得回写幽灵条目
     cleanupMessageDom(messageId);
     if (renderTable) renderTable.delete(messageId);
     finalizedSkipRegistry.delete(Number(messageId));
@@ -921,32 +1060,33 @@ function onGenerationEnded() {
  *     （容器被外部清掉时，按出现序号补回渲染表内容）。
  * L3：观察范围从 document.body 收窄到聊天容器（#chat）；observer 调用走 quiet 隐藏。
  */
-function initObserver() {
-    if (observer) return;
-    observer = new MutationObserver(() => {
-        observerHits++;
-        try {
-            if (!shouldRun() || activeMessageId === null || !renderTable) return;
-            const list = renderTable.get(activeMessageId);
-            if (!list || list.length === 0) return;
-            const $mesText = getMesTextElement(activeMessageId);
-            if (!$mesText || !$mesText.length) return;
-            if (isEditingDom($mesText)) return;
-            const mesEl = $mesText[0].parentElement;
-            for (const entry of list) {
-                // 1. 每帧重绘后重新隐藏原文段区域（ST 已恢复原文）
-                if (entry.startTag || entry.endTag) {
-                    hideSegmentRange($mesText, {
-                        startTag: entry.startTag,
-                        endTag: entry.endTag,
-                        raw: entry.raw,
-                        occurrence: entry.occurrence ?? 0,
-                        closed: entry.closed === true,
-                    }, true);
-                }
-                // 2. 防御：容器被外部清掉 → 按出现序号补回（兄弟节点方案下理论罕见）
-                const occ = typeof entry.occurrence === 'number' ? entry.occurrence : 0;
-                if (entry.html && mesEl && !mesEl.querySelector(`.${STREAM_SEGMENT_CLASS}[data-occurrence="${occ}"]`)) {
+/** 观察聊天容器的 DOM 恢复操作函数。 */
+function performObserverRecovery() {
+    try {
+        if (!shouldRun() || activeMessageId === null || !renderTable) return;
+        const list = renderTable.get(activeMessageId);
+        if (!list || list.length === 0) return;
+        const $mesText = getMesTextElement(activeMessageId);
+        if (!$mesText || !$mesText.length) return;
+        if (isEditingDom($mesText)) return;
+        const mesEl = $mesText[0].parentElement;
+        for (const entry of list) {
+            // 1. 每帧重绘后重新隐藏原文段区域（ST 已恢复原文）
+            if (entry.startTag || entry.endTag) {
+                hideSegmentRange($mesText, {
+                    startTag: entry.startTag,
+                    endTag: entry.endTag,
+                    raw: entry.raw,
+                    occurrence: entry.occurrence ?? 0,
+                    closed: entry.closed === true,
+                    match: entry.match === 'last' ? 'last' : '',
+                }, true);
+            }
+            // 2. 防御：容器被外部清掉 → 按出现序号补回（兄弟节点方案下理论罕见）
+            const occ = typeof entry.occurrence === 'number' ? entry.occurrence : 0;
+            if (entry.html && mesEl && !mesEl.querySelector(`.${STREAM_SEGMENT_CLASS}[data-occurrence="${occ}"]`)) {
+                isPerformingDomSurgery = true;
+                try {
                     const node = document.createElement('div');
                     node.className = STREAM_SEGMENT_CLASS;
                     node.dataset.occurrence = String(occ);
@@ -955,12 +1095,56 @@ function initObserver() {
                     const textNode = mesEl.querySelector('.mes_text');
                     if (textNode) textNode.after(node);
                     else mesEl.appendChild(node);
+                } finally {
+                    isPerformingDomSurgery = false;
                 }
             }
-            observerApplies++;
-        } catch (err) {
-            console.warn('[rp-hub-compat] 流式 DOM 恢复手术失败：', String(err?.message || err));
         }
+        observerApplies++;
+    } catch (err) {
+        console.warn('[rp-hub-compat] 流式 DOM 恢复手术失败：', String(err?.message || err));
+    }
+}
+
+/**
+ * 观察聊天容器的 DOM 变化。ST 每帧 innerHTML 整体替换（script.js:3669）必然触发
+ * childList/characterData —— 但 STREAM_TOKEN_RECEIVED 每 token、DOM 重绘被 streaming_fps
+ * 节流：检测每 token 跑（onStreamToken），DOM 手术本应由 onStreamToken 的 processDetection
+ * 完成；此处 observer 承担**每帧重绘后的恢复性手术**：
+ *   1. ST 每帧用原文重绘 .mes_text → 我们隐藏的原文段区域被恢复 → 每帧重新隐藏
+ *     （hideSegmentRange，按渲染表的 startTag/endTag/occurrence；quiet 模式免逐帧日志）；
+ *   2. 段容器是 .mes 兄弟节点（S2）→ ST 重绘不清它 → 无需每帧重建；仅防御性补回
+ *     （容器被外部清掉时，按出现序号补回渲染表内容）。
+ * L3：观察范围从 document.body 收窄到聊天容器（#chat）；observer 调用走 quiet 隐藏。
+ */
+function initObserver() {
+    if (observer) return;
+    observer = new MutationObserver((mutations) => {
+        observerHits++;
+        if (isPerformingDomSurgery) return; // 静默操作门控：内部正在做 DOM 手术，直接跳过
+
+        // 变更目标过滤：若所有 mutations 均来自流式容器或隐藏标记，则直接忽略
+        let hasRelevantMutation = false;
+        for (const m of mutations) {
+            const target = m.target;
+            if (target && target.nodeType === 1) {
+                if (target.classList?.contains(STREAM_SEGMENT_CLASS) || target.closest?.(`.${STREAM_SEGMENT_CLASS}`)) {
+                    continue;
+                }
+            }
+            hasRelevantMutation = true;
+            break;
+        }
+        if (!hasRelevantMutation) return;
+
+        if (observerRafPending) return;
+        observerRafPending = true;
+        const scheduleFn = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb) => setTimeout(cb, 0);
+        scheduleFn(() => {
+            observerRafPending = false;
+            if (isPerformingDomSurgery) return;
+            performObserverRecovery();
+        });
     });
     const target = (typeof chatElement !== 'undefined' && chatElement?.[0]) ? chatElement[0] : (document.body || null);
     if (target) observer.observe(target, { childList: true, subtree: true, characterData: true });
@@ -971,9 +1155,31 @@ function stopObserver() {
         observer.disconnect();
         observer = null;
     }
+    observerRafPending = false;
 }
 
 /* ---------- S1：正式链路拼合 API（display.js coverMessage 调用） ---------- */
+
+/**
+ * 等待指定消息的在途流式段渲染全部完成（异步协调互斥锁 / Drain Barrier）。
+ * 消除正式渲染 coverMessage 与流式定格渲染的竞态双重闪烁。
+ * 代际令牌语义：只等待【当前代、本消息】的在途渲染 —— 停止/切聊推进 generationSeq 后
+ * 旧代悬挂令牌被过滤，屏障立即放行（等待上限 ≈0），不会再被脏计数短路或多等。
+ * @param {number} messageId
+ * @param {number} [timeoutMs=1000] 最大等待超时（毫秒）
+ * @returns {Promise<void>}
+ */
+export async function waitForPendingStreamRenders(messageId, timeoutMs = 1000) {
+    if (!hasInFlight(generationSeq, messageId) || activeMessageId !== Number(messageId)) return;
+    const start = Date.now();
+    while (hasInFlight(generationSeq, messageId) && activeMessageId === Number(messageId)) {
+        if (Date.now() - start > timeoutMs) {
+            console.warn(`[rp-hub-compat] waitForPendingStreamRenders 等待超时 (${timeoutMs}ms)，强制继续`);
+            break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 16));
+    }
+}
 
 /**
  * 读取某消息的流式【定格】段（closed=true；含 startTag/endTag/engineText）。
@@ -1027,11 +1233,11 @@ export function initStreamService() {
     eventSource.on(event_types.STREAM_TOKEN_RECEIVED, onStreamToken);
     // CHARACTER_MESSAGE_RENDERED 用普通 on（追加在第二部正式链路之后）→ 先正式、后清理
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, onMessageRendered);
-    eventSource.on(event_types.GENERATION_STOPPED, onStopOrChatChanged);
+    eventSource.on(event_types.GENERATION_STOPPED, onGenerationStopped);
     // M3：错误/中断路径兜底清理（正常路径由 RENDERED 提前清理，定时器被清）
     eventSource.on(event_types.GENERATION_ENDED, onGenerationEnded);
     eventSource.on(event_types.MESSAGE_DELETED, onMessageDeleted);
-    eventSource.on(event_types.CHAT_CHANGED, onStopOrChatChanged);
+    eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
     // 滑动/编辑：定格段作废 → 正式链路全量渲染新 swipe/编辑文本（防旧容器+新正文并存）
     eventSource.on(event_types.MESSAGE_SWIPED, onMessageSwiped);
     eventSource.on(event_types.MESSAGE_EDITED, onMessageEdited);
@@ -1046,10 +1252,10 @@ export function stopStreamService() {
     eventSource.removeListener(event_types.GENERATION_STARTED, onGenerationStarted);
     eventSource.removeListener(event_types.STREAM_TOKEN_RECEIVED, onStreamToken);
     eventSource.removeListener(event_types.CHARACTER_MESSAGE_RENDERED, onMessageRendered);
-    eventSource.removeListener(event_types.GENERATION_STOPPED, onStopOrChatChanged);
+    eventSource.removeListener(event_types.GENERATION_STOPPED, onGenerationStopped);
     eventSource.removeListener(event_types.GENERATION_ENDED, onGenerationEnded);
     eventSource.removeListener(event_types.MESSAGE_DELETED, onMessageDeleted);
-    eventSource.removeListener(event_types.CHAT_CHANGED, onStopOrChatChanged);
+    eventSource.removeListener(event_types.CHAT_CHANGED, onChatChanged);
     eventSource.removeListener(event_types.MESSAGE_SWIPED, onMessageSwiped);
     eventSource.removeListener(event_types.MESSAGE_EDITED, onMessageEdited);
     stopObserver();
@@ -1068,7 +1274,8 @@ export function debugStreamState() {
         messageIdKnown,
         accumulatedLen: accumulated.length,
         streamPrefixLen: streamPrefix.length,
-        pendingRenders,
+        inFlightRenders: inFlightRenders.map((t) => ({ ...t })), // 代际令牌快照（替代旧 pendingRenders 标量口径）
+        inFlightCurrentGen: countInFlight(generationSeq, activeMessageId ?? NaN),
         renderTableSize: renderTable ? renderTable.raw.size : 0,
     };
 }
