@@ -207,6 +207,18 @@ export function getExternalRegexScriptOrder() {
  * 「1→2→1 渲染管线」（rp_hub_render_mode='two_pass_121'）按此把预设脚本分到
  * 阶段①/③、卡内嵌（scoped）+ 全局（global）分到阶段②。
  *
+ * rphub 模式附加归一（对齐官方导入层，app.js 运行时无 disabled 概念）：
+ *   - disabled→enabled 归一（app.js:3200「enabled === false 才跳过」）；
+ *   - 双 true 消歧（D 修复，2026-10-07，对齐 core-utils.js:520）：markdownOnly 与
+ *     promptOnly 同真 → promptOnly=false。官方生态内双 true 在导入时即被消歧为仅显示，
+ *     runtime 的「双 true 全跳」是死分支（app.js:3209-3211 推演）；我方此前复刻的是
+ *     死分支而非官方 normalize 后的实际行为，官方卡理论态双 true 脚本会在我方全跳。
+ *     仅对 rphub 源脚本生效——st 源的双 true 双通道是原版 verbatim 语义（复刻正确）。
+ *   - NAI 画图正则排序恒最后（D2-5②，对齐 app.js:3192-3196）：官方单池稳定排序把
+ *     名为「NAI画图正则」的脚本移到执行序列末尾。我方三桶结构下等效落点=合并后的
+ *     最终执行序列内把 NAI 脚本移到末位（稳定排序，桶间相对顺序不变，仅桶内/跨桶
+ *     的 NAI 条目集体后移）。仅 rphub 模式生效；st 模式无此官方概念，不动序。
+ *
  * @param {object} args
  * @param {object[]} [args.global]  全局脚本（extension_settings.regex）
  * @param {object[]} [args.preset]  当前 preset 脚本
@@ -242,13 +254,32 @@ export function mergeScripts({
         )));
 
     if (mode === 'rphub') {
-        // rphub 解释器只认 enabled（app.js:2927「enabled === false 才跳过」）；
+        // rphub 解释器只认 enabled（app.js:3200「enabled === false 才跳过」）；
         // ST 存储脚本用 disabled 字段 —— 归一为 enabled，保证禁用开关在 rphub 语义下同样生效。
-        return scripts.map((s) => {
+        // 双 true 消歧（对齐 core-utils.js:520）：仅对 rp_source==='scoped'（走 rphub 解释器的
+        // 脚本，engine.js 分层解释器判定）生效——官方卡 scoped 脚本在导入层即被消歧为仅显示；
+        // preset/global 源仍走 st 解释器（原版 verbatim 语义下双 true 两通道各按分支命中，
+        // 是复刻原版的正确行为），消歧它们反而会改变预设作者意图。
+        let normalized = scripts.map((s) => {
             if (!s || typeof s !== 'object') return s;
             const isDisabled = s.enabled === false || s.disabled === true;
-            return { ...s, enabled: !isDisabled };
+            const out = { ...s, enabled: !isDisabled };
+            if (s.rp_source === 'scoped' && out.markdownOnly === true && out.promptOnly === true) {
+                out.promptOnly = false;
+            }
+            return out;
         });
+        // NAI 画图正则排序恒最后（D2-5②，对齐 app.js:3192-3196）：官方单池内稳定排序
+        // `aIsImageGen === bIsImageGen ? 0 : (aIsImageGen ? 1 : -1)`。我方把 NAI 脚本
+        // 移到合并序列末位（稳定：非 NAI 相对顺序与 NAI 相对顺序均保持不变）。
+        const isNai = (s) => {
+            const name = s?.name || s?.scriptName;
+            return typeof name === 'string' && name === 'NAI画图正则';
+        };
+        const nonNai = normalized.filter((s) => !isNai(s));
+        const nai = normalized.filter(isNai);
+        normalized = [...nonNai, ...nai];
+        return normalized;
     }
     return scripts;
 }

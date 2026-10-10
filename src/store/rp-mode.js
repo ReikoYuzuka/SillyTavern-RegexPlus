@@ -173,7 +173,10 @@ export function decideRpToggleAction({ enable, formatDetail, contentHash, hasCha
 // ST 侧：缓存 + HTTP（依赖 fetch / 全局，仅浏览器可用）
 // ---------------------------------------------------------------------------
 
-const CACHE_TTL_MS = 30 * 60 * 1000;
+// D6：30min→5min——重导入产生新 cardId/contentHash，TTL 期间旧 modeCache 条目会
+// 拿着旧判定继续工作；缩短过期窗口缩小影响面（失效时机已有：CHAT_CHANGED /
+// SETTINGS_UPDATED / degradeTarget 变更 / force-render clearModeCache）。
+const CACHE_TTL_MS = 5 * 60 * 1000;
 const modeCache = new Map(); // key(avatar|name) -> { cardId, formatDetail, contentHash, marked, ts }
 
 export function clearModeCache() {

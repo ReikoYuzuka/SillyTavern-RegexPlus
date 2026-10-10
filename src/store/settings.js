@@ -19,7 +19,10 @@
  *       false = 关闭保护（rphub 模式也直接对全文替换，正则可改动 HTML/代码块等）。
  *       仍受 rphub.js 原有「正则含 < > ``` 时跳过保护」约束。
  *   - rp_hub_protect_items: string[] | 不存在 —— 保护项勾选（PROTECT_ITEM_KEYS 子集：
- *       html_doc / script / style / cot_think / code_block / inline_code / html_tag）。
+ *       html_doc / html_doc_pair / script / style / doctype_unclosed / html_unclosed /
+ *       script_unclosed / style_unclosed / ui_template_updates / html_comment / code_block /
+ *       code_block_unclosed / inline_code / html_tag / cot_think —— D2-3 扩到官方 13 备选
+ *       + parseCot 思考块；旧 7 类键名全兼容，旧存储读取时未知新键按缺省全开补齐）。
  *       缺省 = 全部（默认全开，与保护未配置时逐字一致）；空数组 = 无任何保护项。
  *       未知项读取时剔除。
  *   - rp_hub_degrade_target: 'st' | 'rphub' | 'none' —— 后端判定失败（卡未导入 /

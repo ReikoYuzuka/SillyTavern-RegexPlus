@@ -21,6 +21,7 @@ export {
     this_chid,
     chatElement,
     chat_metadata,
+    name1,
     saveSettingsDebounced,
     saveChatConditional,
     messageFormatting,

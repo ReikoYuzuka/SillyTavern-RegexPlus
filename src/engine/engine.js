@@ -777,9 +777,26 @@ export function run(args = {}) {
         : rawScripts;
     if (scripts.length === 0) return { text, applied };
 
+    // {{user}} 前置替换（D2-4 修复，2026-10-07）：官方 processRegex 在正则执行前
+    // replaceUserNamePlaceholder(text)（app.js:3190，本体 :533-534 仅 {{user}}→user.name，
+    // /\{\{\s*user\s*\}\}/gi 大小写不敏感、容忍空白）——官方卡 findRegex 里写 {{user}}
+    // 时正则执行时已是用户名本体。st 模式不做（原版语义是替换后尾置宏链，engine.js:448）。
+    // options.userName（runtime.engineRun 注入 name1）；缺省/非串 → 无用户名可用，
+    // 保持原文（与官方 user.name 为空串时的 replace 行为一致：trim 后空串仍替换为 ''——
+    // 此处保守不替换，避免把占位符清空导致 findRegex 必失配）。
+    let workText = text;
+    if (mode === 'rphub') {
+        const userName = options.userName;
+        if (typeof userName === 'string' && userName.length > 0) {
+            workText = workText.replace(/\{\{\s*user\s*\}\}/gi, () => userName.trim());
+        }
+    }
+    // 官方 processRegex 在 replaceUserNamePlaceholder 后无空串早退（app.js:3190→3198 直接进脚本
+    // 循环）：text 仅含 {{user}} 且用户名 trim 后为空时 workText = ''，仍继续跑后续正则链
+    // （能把空串替换成非空的 replacement 需要生效），不在此短路。
+
     const { stGeneralMode = 'both', allowUserOnlyDoubleFalse = true, protectEnabled = true, protectItems, precheckEnabled = true, precheckBypassKeys = [], autoProtectScript = true, renderMode = 'two_pass_121', passRules, cleanRules, secondPassFilter, secondPassEnabled = false, skipBlankSegments = false } = options;
     const m = { ...defaultMacros, ...macros };
-
     // 修复 F1（审查报告 L1/D1-D3）：st 模式强制 legacy —— 原版卡（formatDetail=st）执行顺序与
     // 可见文本必须逐字复刻原版（Global→Preset→Scoped 串行、全文本替换、无界面段藏走）。
     // 1→2→1 渲染管线（two_pass_121：界面段藏走/预设分桶/第二遍）仅服务 rphub 美化管线。
@@ -936,7 +953,7 @@ export function run(args = {}) {
 
     if (effectiveRenderMode === 'legacy') {
         // legacy = 现状：顺序混跑全部脚本 + 自动隔离脚本区（autoProtectScript 设置生效）
-        let finalString = text;
+        let finalString = workText;
         for (const rawScript of scripts) {
             finalString = runScriptOnce(rawScript, finalString, { maskScripts: wantsAutoProtectLegacy(rawScript) });
         }
@@ -971,7 +988,7 @@ export function run(args = {}) {
         localScripts.push(script);
     }
 
-    let finalString = text;
+    let finalString = workText;
 
     // ① 预设第一遍：界面生成（狐策/表裏/NC-MAP 完整文档）+ 纯文本清理（杀八股/OS/隐藏标签）
     for (const script of firstScripts) {

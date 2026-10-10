@@ -10,18 +10,19 @@
  *     - rphub：双 false 仅显示（prompt 干净）
  *     - st：   双 false 双通道
  *
- * 逐条对照（RP-Hub-main/assets/js/app.js）：
- *   - 2917  replaceUserNamePlaceholder（{{user}} 替换，rphub 每次先跑）
- *   - 2919-2923  NAI画图正则排最后（内置分组在合并阶段已按 TYPE_ORDER 排最后；此处不再重复）
- *   - 2927  enabled === false 才跳过（undefined 视为启用）
- *   - 2931  placement 未定义 → 默认 [1,2]（全生效，兼容旧数据）
- *   - 2936-2938  userOnly 判定 + 双通道过滤
- *   - 2941-2942  minDepth/maxDepth（undefined/null 跳过）
- *   - 2946-2950  字段别名（regex/findRegex、flags/regexFlags、replacement/replaceString）
- *   - 2955-2963  /pattern/flags 字面量解析 + flags 验证
- *   - 2965       normalizeRegexModifiers（内联 (?s)/(?i)/(?m) 移到 flags）
- *   - 2967       new RegExp(pattern, flags)
- *   - 2973-2984  保护替换（正则不含 < > ``` 时启用）+ 异常捕获跳过
+ * 逐条对照（RP-Hub-main/assets/js/app.js 实读行号，2026-10-07 终审修复基线）：
+ *   - 3190  replaceUserNamePlaceholder（{{user}} 替换，rphub 每次先跑 —— 已由 engine.js run()
+ *           rphub 分支前置，见 D2-4）
+ *   - 3192-3196  NAI画图正则排最后（D2-5②，mergeScripts 归一层等效实现）
+ *   - 3200  enabled === false 才跳过（undefined 视为启用）
+ *   - 3204  placement 未定义 → 默认 [1,2]（全生效，兼容旧数据）
+ *   - 3209-3211  userOnly 判定 + 双通道过滤
+ *   - 3214-3215  minDepth/maxDepth（undefined/null 跳过）
+ *   - 3219-3223  字段别名（regex/findRegex、flags/regexFlags、replacement/replaceString）
+ *   - 3229-3237  /pattern/flags 字面量解析 + flags 验证
+ *   - 3239       normalizeRegexModifiers 必执行（D2-1 已接线）
+ *   - 3240-3242  isImageGenScript → getImageTagRegex() 覆盖 pattern（D2-5①）
+ *   - 3244-3253  保护替换 + 整条包裹特判（D2-2）+ 异常捕获跳过
  *
  * 与原版的语义差异（见汇报）：
  *   - 原版 processRegex 的 isDisplay 通道没有 role 时 placement 过滤不生效（role null 时
@@ -32,10 +33,31 @@
 
 import { runInterruptibleReplace, withBudget, BudgetInterrupted } from '../budget.js';
 import { transformUnprotectedText } from '../protect.js';
+import { normalizeRegexModifiers } from '../rphub-normalize.js';
 
 const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
     ? () => performance.now()
     : () => Date.now();
+
+/**
+ * NAI 画图标签生成正则 —— 逐字复刻 RP-Hub core-utils.js:71-72 getImageTagRegex（D2-5①）。
+ * 后一个 image### 不能作为前一个标签的结尾。
+ * @returns {RegExp} 全局 + 忽略大小写
+ */
+export function getImageTagRegex() {
+    return /image###((?:(?!image###|###)[^\r\n])*?)(?:###|(?=\r?\n)|$)/gi;
+}
+
+/**
+ * NAI 画图脚本判定 —— 对齐官方 app.js:3226 isImageGenScript
+ * （`（script.name || script.scriptName）=== 'NAI画图正则'`；系统名本体 core-utils.js:951）。
+ * @param {object} script
+ * @returns {boolean}
+ */
+export function isImageGenScript(script) {
+    const name = script?.name || script?.scriptName;
+    return typeof name === 'string' && name === 'NAI画图正则';
+}
 
 /**
  * rphub 模式的通道/字段判定（对照 app.js:2931-2942）。
@@ -74,9 +96,14 @@ export function rphubShouldRun(
 
 /**
  * 提取 rphub 字段（对照 app.js:2946-2963）。
+ * normalizeRegexModifiers（D2-1 修复，2026-10-07）：与官方 app.js:3239「必执行」对齐 ——
+ * 内联修饰符 (?s)/(?i)/(?m) 摘取进 flags（本体 rphub-normalize.js，逐字复刻
+ * core-utils.js:266-276）。此前该参数默认 {} 且唯一调用点不传第二参 → 恒跳过 →
+ * (?s) 开头的官方卡正则 new RegExp 抛 SyntaxError → executor catch → 整条脚本静默失效。
+ * 仍保留参数注入（测试可覆盖），缺省 = 接线后的真实实现。
  * @returns {{ regexPattern: string|null, flags: string, replacement: string, sourceLiteral: boolean }}
  */
-export function extractRphubFields(script, { normalizeRegexModifiers } = {}) {
+export function extractRphubFields(script, { normalizeRegexModifiers: normalize = normalizeRegexModifiers } = {}) {
     // 字段别名（app.js:2946-2950）
     let regexPattern = script.regex || script.findRegex;
     let flags = script.flags || script.regexFlags || 'g';
@@ -96,12 +123,30 @@ export function extractRphubFields(script, { normalizeRegexModifiers } = {}) {
         }
     }
 
-    // 内联修饰符归一（app.js:2965）
-    if (normalizeRegexModifiers) {
-        ({ pattern: regexPattern, flags } = normalizeRegexModifiers(regexPattern, flags));
+    // 内联修饰符归一（app.js:3239；D2-1：必执行，同官方）
+    if (normalize) {
+        ({ pattern: regexPattern, flags } = normalize(regexPattern, flags));
     }
 
     return { regexPattern, flags, replacement, sourceLiteral: true };
+}
+
+/**
+ * 提取 rphub 字段并按 NAI 特判解析出可编译 pattern/flags（D2-5①）。
+ * 对齐官方 app.js:3240-3242：
+ *   const re = isImageGenScript ? getImageTagRegex() : new RegExp(regexPattern, flags);
+ * NAI 画图脚本无视卡内写死的 pattern/flags，恒用官方生成式 getImageTagRegex()（'gi'）。
+ * @param {object} script
+ * @returns {{ regexPattern: string, flags: string, replacement: string, sourceLiteral: boolean }}
+ */
+export function extractRphubFieldsWithNai(script) {
+    const fields = extractRphubFields(script);
+    if (fields.regexPattern === null) return fields;
+    if (isImageGenScript(script)) {
+        const imageRegex = getImageTagRegex();
+        return { ...fields, regexPattern: imageRegex.source, flags: imageRegex.flags };
+    }
+    return fields;
 }
 
 /**
@@ -180,7 +225,7 @@ export function runRegexScriptRphub(script, text, options = {}) {
         skipBlankSegments = false,
     } = options;
 
-    const { regexPattern, flags, replacement } = extractRphubFields(script);
+    const { regexPattern, flags, replacement } = extractRphubFieldsWithNai(script);
     if (!regexPattern) {
         return { text, changed: false, timedOut: false, reason: null, elapsedMs: 0 };
     }
@@ -195,7 +240,7 @@ export function runRegexScriptRphub(script, text, options = {}) {
         precheckBypassKeys,
         scriptKey: script.id || script.scriptName || script.name,
         run: () => {
-            // 保护启用条件（app.js:2973）：正则不含 < > 且不含 ``` 才启用；
+            // 保护启用条件（app.js:3244）：正则不含 < > 且不含 ``` 才启用；
             // 额外受「保护替换」总开关（protectEnabled）与勾选项（protectItems）约束
             const useProtection = allowProtection
                 && protectEnabled
@@ -207,7 +252,32 @@ export function runRegexScriptRphub(script, text, options = {}) {
             const makeReplacer = () => (args) => expandReplacement(replacement, args);
 
             if (useProtection) {
-                // transformUnprotectedText 多片段替换（app.js:2976-2979），按勾选项保护
+                // 整条包裹特判（D2-2 修复，2026-10-07）—— 逐字复刻官方 app.js:3246-3253：
+                //   const wholeMatch = re.exec(result); re.lastIndex = 0;
+                //   const wrapped = wholeMatch?.[0] === result ? result.replace(re, replacement) : null;
+                //   re.lastIndex = 0;
+                //   result = wrapped !== null && wrapped.includes(result)
+                //       ? wrapped   // 完整保留原文的整条包裹只执行一次，避免给面板内每段文字重复套壳
+                //       : cardUtils.transformUnprotectedText(result, part => part.replace(re, replacement));
+                // 官方「整楼套面板」型正则（^([\s\S]+)$ 类，replacement 是完整面板骨架）在官方
+                // 只包一次；无此分支时保护路径逐段替换会把面板内每段文字各包一次 → 面板重复嵌套。
+                // 预算承载：整条包裹的全文 replace 经 runInterruptibleReplace 保留超时掐断。
+                const reWhole = new RegExp(regexPattern, flags);
+                const wholeMatch = reWhole.exec(text);
+                reWhole.lastIndex = 0;
+                const wrapped = wholeMatch?.[0] === text
+                    ? (() => {
+                        const r = runInterruptibleReplace(text, reWhole, makeReplacer(), budgetMs);
+                        if (!r.done) throw new BudgetInterrupted();
+                        return r.text;
+                    })()
+                    : null;
+                reWhole.lastIndex = 0;
+                if (wrapped !== null && wrapped.includes(text)) {
+                    return { done: true, text: wrapped };
+                }
+
+                // transformUnprotectedText 多片段替换（app.js:3253），按勾选项保护
                 const start = now();
                 const textOut = transformUnprotectedText(text, (part) => {
                     // 空白段守卫（rp_hub_skip_blank_segments，默认开启）：保护替换按 HTML 标签
@@ -227,7 +297,7 @@ export function runRegexScriptRphub(script, text, options = {}) {
                 return { done: true, text: textOut };
             }
 
-            // 无保护直接替换（app.js:2982）
+            // 无保护直接替换（app.js:3255）
             const re = new RegExp(regexPattern, flags);
             return runInterruptibleReplace(text, re, makeReplacer(), budgetMs);
         },

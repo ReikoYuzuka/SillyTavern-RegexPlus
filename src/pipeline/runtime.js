@@ -23,6 +23,7 @@ import {
     this_chid,
     chatElement,
     extension_settings,
+    name1,
     saveChatConditional,
     messageFormatting,
     substituteParams,
@@ -251,6 +252,9 @@ export const runtime = {
                 secondPassFilter: runtime.getSecondPassFilter(),
                 secondPassEnabled: runtime.getSecondPassEnabled(),
                 skipBlankSegments: runtime.getSkipBlankSegments(),
+                // D2-4（{{user}} 前置，对齐官方 app.js:3190 replaceUserNamePlaceholder）：
+                // rphub 分支在正则执行前把 {{user}} 换成用户名（只换 {{user}}，不做别的宏）。
+                userName: typeof name1 === 'string' ? name1 : '',
             },
         });
     },
@@ -283,6 +287,8 @@ export const runtime = {
                 precheckBypassKeys: runtime.getPrecheckBypass(),
                 autoProtectScript: runtime.getAutoProtectScript(),
                 renderMode: 'legacy', // 串行，不走 1→2→1
+                // D2-4（{{user}} 前置，对齐官方 app.js:3190 replaceUserNamePlaceholder）
+                userName: typeof name1 === 'string' ? name1 : '',
             },
         });
         return typeof result?.text === 'string' ? result.text : text;
