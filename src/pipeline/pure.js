@@ -365,6 +365,21 @@ export function isTemplateRendered(msg) {
  */
 export function commitMessageView(msg, { raw, display, prompt, fp } = {}) {
     msg.extra ??= {};
+    // JOIN-05（多方写入竞争）：msg.mes 还原原始文本前，若本楼层已有更高修订号的外部写入
+    // （ST-Prompt-Template 等共存扩展也写 chat[i].mes），保留对方版本并警告——raw 是我们
+    // 处理起点，若 mes 已被他人改写，回写旧 raw 会丢失对方修改。
+    // 约定：本扩展与共存方写入 mes 时递增 extra.rph_rev（修订号）；对方未遵循约定（无 rph_rev）
+    // 时无法检测，保持原行为。
+    if (typeof raw === 'string' && typeof msg.mes === 'string' && msg.mes !== raw) {
+        const ownRev = typeof msg.extra[RAW_MES_KEY] === 'string' && msg.extra[RAW_MES_KEY] === msg.mes;
+        if (!ownRev && typeof msg.extra?.rph_rev === 'number') {
+            console.warn('[rp-hub-compat] commitMessageView：检测到 mes 已被外部修改（rph_rev 修订链），保留外部版本不回写 raw。');
+        } else {
+            msg.mes = raw;
+        }
+    } else if (typeof raw === 'string') {
+        msg.mes = raw;
+    }
     msg.extra[RAW_MES_KEY] = raw;
     msg.extra[DISPLAY_KEY] = display;
     msg.extra[PROMPT_KEY] = prompt;
@@ -372,7 +387,7 @@ export function commitMessageView(msg, { raw, display, prompt, fp } = {}) {
     if (!isTemplateRendered(msg)) msg.extra.display_text = display;
     msg.extra[FLAG_KEY] = true;
     delete msg.extra.rph_stream_processed;
-    msg.mes = raw;
+    msg.extra.rph_rev = (typeof msg.extra.rph_rev === 'number' ? msg.extra.rph_rev : 0) + 1;
     return msg;
 }
 

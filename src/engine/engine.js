@@ -772,7 +772,9 @@ export function run(args = {}) {
             if (!s || s.rp_source !== 'scoped') return true; // 非 scoped 照常
             if (options.excludeFirstMessageFulltextOnly === false) return false; // 暴力档：跳过全部 scoped
             const pattern = String(s.regex ?? s.findRegex ?? '');
-            return !/\(\?!\[\\s\\S\]\*/.test(pattern); // 精细档：只跳过全文负前瞻
+            // REG-09：归一化去空白后再匹配——原文 `( ?![\s\S]*`（作者排版带空格）也应命中
+            const normalizedPattern = pattern.replace(/\s+/g, '');
+            return !/\(\?!\[\\s\\S\]\*/.test(normalizedPattern); // 精细档：只跳过全文负前瞻
         })
         : rawScripts;
     if (scripts.length === 0) return { text, applied };
@@ -795,7 +797,12 @@ export function run(args = {}) {
     // 循环）：text 仅含 {{user}} 且用户名 trim 后为空时 workText = ''，仍继续跑后续正则链
     // （能把空串替换成非空的 replacement 需要生效），不在此短路。
 
-    const { stGeneralMode = 'both', allowUserOnlyDoubleFalse = true, protectEnabled = true, protectItems, precheckEnabled = true, precheckBypassKeys = [], autoProtectScript = true, renderMode = 'two_pass_121', passRules, cleanRules, secondPassFilter, secondPassEnabled = false, skipBlankSegments = false } = options;
+    const { allowUserOnlyDoubleFalse = true, protectEnabled = true, protectItems, precheckEnabled = true, precheckBypassKeys = [], autoProtectScript = true, renderMode = 'two_pass_121', passRules, cleanRules, secondPassFilter, secondPassEnabled = false, skipBlankSegments = false } = options;
+    // REG-11：stGeneralMode 默认 'verbatim'（verbatim 脚本只跑一次）。⚠️ 与 st.js:16-26
+    // 「net-effect 双通道」设计注释冲突：'both' 是有意设计（ST 原版写回 mes 间接双通道，
+    // 本引擎事件介入模型下显式双跑）——复查确认保留 'both'，避免显示通道 general 脚本
+    // 失效回归（历史 bug：思维链美化显示失效）。
+    const stGeneralMode = options.stGeneralMode === 'verbatim' ? 'verbatim' : 'both';
     const m = { ...defaultMacros, ...macros };
     // 修复 F1（审查报告 L1/D1-D3）：st 模式强制 legacy —— 原版卡（formatDetail=st）执行顺序与
     // 可见文本必须逐字复刻原版（Global→Preset→Scoped 串行、全文本替换、无界面段藏走）。

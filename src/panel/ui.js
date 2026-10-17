@@ -1618,6 +1618,9 @@ function buildDiagnoseBadges(result) {
     if (result.exec.timedOut) {
         const reasonText = result.exec.reason === 'redos-precheck' ? '预检拦截' : (result.exec.reason === 'budget-exceeded' ? '超预算' : (result.exec.reason === 'interrupted' ? '中断' : result.exec.reason || '超时'));
         badges.push(`<span class="regex-diagnose-badge regex-diagnose-badge-warn" title="${reasonText}">${reasonText}</span>`);
+    } else if (result.exec.reason === 'budget-exceeded') {
+        // REG-02：超预算但结果已保留（不再丢弃），标注提示徽章
+        badges.push('<span class="regex-diagnose-badge regex-diagnose-badge-warn" title="耗时超预算，结果已保留">超预算(保留)</span>');
     } else if (result.exec.error) {
         badges.push('<span class="regex-diagnose-badge regex-diagnose-badge-error" title="执行错误">执行✗</span>');
     } else if (result.compile.ok) {
@@ -1643,6 +1646,8 @@ function buildDiagnoseDetail(result) {
         parts.push(`执行错误：${result.exec.error}`);
     } else if (result.exec.timedOut) {
         parts.push(`执行：超时跳过（reason=${result.exec.reason || 'timedOut'}）`);
+    } else if (result.exec.reason === 'budget-exceeded') {
+        parts.push(`执行：超预算但结果已保留（${Math.round(result.exec.elapsedMs)}ms，${result.exec.changed ? '有替换' : '无改动'}）`);
     } else {
         parts.push(`执行：${result.exec.changed ? '有替换' : '无改动'}（${Math.round(result.exec.elapsedMs)}ms）`);
     }

@@ -16,3 +16,16 @@ SillyTavern 正则引擎插件：RP-Hub 角色卡的正则解释器与渲染管�
 - **保护替换**：正则美化产出代码块后，后续正则不会破坏代码块。
 - **ReDoS 预检 + 超时预算**：病态正则执行前被拦截，重正则预算内掐断。
 - **triggerSlash 语义分发桥**：纯文本 `/` 开头按钮走「发消息 + 生成」，不再报 Unknown command。
+
+## 第三方写入约定（JOIN-07）
+
+其它扩展 / 脚本若直接写入 `extension_settings.regex`（或预设/卡内嵌脚本数据），必须遵守：
+
+- **稳定 id**：每条脚本对象的 `id` 字段必须在多次会话间保持稳定（如内容哈希），不要用随机数
+  或每次启动重新生成——本插件的诊断、绕过表（`rp_hub_precheck_bypass`）与面板编辑定位都以
+  `script.id || script.scriptName` 为键，id 漂移会导致用户配置失联。
+- **字段语义**：`findRegex`/`replaceString`/`placement`/`markdownOnly`/`promptOnly`/`disabled`
+  与原版 ST 正则扩展语义一致；RP 专属字段（`userOnly`/`scope`/`rp_source`）由本插件解释。
+- **消息楼层写入**：写 `chat[i].mes` 的共存方建议维护 `extra.rph_rev` 修订号（写入时 +1）。
+  本插件写回原始文本前会检测修订链（commitMessageView），遵循约定的共存方不会被本插件
+  意外覆盖修改。

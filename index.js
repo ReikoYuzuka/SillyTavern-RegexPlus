@@ -27,52 +27,10 @@ import { runtime } from './src/pipeline/runtime.js';
 import { mountCompatApi } from './src/pipeline/force-render.js';
 import { rphubCompatPromptInterceptor } from './src/pipeline/prompt.js';
 import { getFormatDetail, clearModeCache } from './src/store/rp-mode.js';
-import { getRegexScripts, getCurrentPresetAPI, getCurrentPresetName } from './src/store/scripts.js';
-import { characters, this_chid, extension_settings, saveSettingsDebounced, eventSource, event_types } from './src/st-bridge.js';
+import { getRegexScripts } from './src/store/scripts.js';
+import { characters, this_chid } from './src/st-bridge.js';
 import { initStreamService } from './src/stream/stream-service.js';
 import { initLegacyStreamHook } from './src/stream/legacy-hook.js';
-
-/**
- * 确保 ST 预设/卡正则白名单（2026-08 思维链美化失效根因修复）。
- *
- * 背景（浏览器运行时实测确认）：ST 1.18 显示通道 getRegexedString → getRegexScripts({allowedOnly:true})
- * → getScriptsByType(PRESET/SCOPED) 要求当前预设 / 当前卡 avatar 分别在
- * extension_settings.preset_allowed_regex / character_allowed_regex 白名单内，否则**整个预设/卡
- * 正则列表返回空** —— 预设里所有美化规则（思维链美化等，即使 enabled）在原生显示通道一律不执行
- * （运行时实测：用户预设「思维链美化 · 表裏」enabled=true 但 preset_allowed_regex=null → 全被过滤）。
- *
- * 本函数在扩展启动时把当前预设 + 当前卡加入白名单（等价 SPreset syncToST 的注入逻辑
- * inject.js:2001-2009），并落盘。幂等；白名单已含则零改动。
- * 恢复后：ST 原生显示通道（流式期间 messageFormatting 的 getRegexedString + 普通渲染）
- * 重新执行预设/卡内嵌正则 → 思维链美化、卡内嵌美化等全部恢复。
- */
-async function ensureRegexWhitelist() {
-    try {
-        // 与读侧（scripts.js getScriptsByType → getCurrentPresetAPI/getCurrentPresetName）完全同源，
-        // 避免写读不一致（旧实现用 ctx.mainApi + preset_settings_openai，非 openai API 时白名单
-        // 键/名对不上 → 预设被 allowedOnly 过滤 → 预设正则完全不渲染）。
-        const api = getCurrentPresetAPI();
-        const presetName = getCurrentPresetName();
-        const avatar = (Array.isArray(characters) && this_chid != null && Number(this_chid) >= 0)
-            ? characters[Number(this_chid)]?.avatar
-            : null;
-        extension_settings.preset_allowed_regex ??= {};
-        if (api && presetName) {
-            extension_settings.preset_allowed_regex[api] ??= [];
-            if (!extension_settings.preset_allowed_regex[api].includes(presetName)) {
-                extension_settings.preset_allowed_regex[api].push(presetName);
-            }
-        }
-        extension_settings.character_allowed_regex ??= [];
-        if (avatar && !extension_settings.character_allowed_regex.includes(avatar)) {
-            extension_settings.character_allowed_regex.push(avatar);
-        }
-        saveSettingsDebounced?.();
-        console.info(`[rp-hub-compat] 正则白名单已确保：预设「${presetName}」api=${api}，卡 avatar=${avatar}（ST 原生显示通道预设/卡正则恢复执行）`);
-    } catch (error) {
-        console.warn('[rp-hub-compat] 正则白名单初始化失败（不阻塞）：', String(error?.message || error));
-    }
-}
 
 /**
  * 扩展激活入口（由 ST hooks.activate 调用）。
@@ -83,22 +41,13 @@ export async function init() {
         return;
     }
 
-    // 确保 ST 预设/卡正则白名单（allowedOnly 显示通道前置条件；缺失 → 预设正则全被过滤，
-    // 思维链美化等全部不执行）。不阻塞：失败仅影响 ST 原生显示通道，本引擎管道照常。
-    // ⚠️ 必须延迟到 APP_READY：extension init 早于 initPresetManager/getCharacters
-    // （script.js:745 vs 748/757），此时 getCurrentPresetAPI/getCurrentPresetName/characters
-    // 都未就绪 → 会写成空名单。APP_READY 时三者已就绪，再确保一次即为权威值。
-    await ensureRegexWhitelist();
-    if (typeof eventSource?.once === 'function' && typeof event_types?.APP_READY === 'string') {
-        eventSource.once(event_types.APP_READY, () => {
-            ensureRegexWhitelist().catch(() => {});
-        });
-    }
-    // 切换角色/预设后白名单需更新（否则新卡/新预设又被 allowedOnly 过滤）。
-    if (typeof eventSource?.on === 'function') {
-        eventSource.on(event_types.CHAT_CHANGED, () => { ensureRegexWhitelist().catch(() => {}); });
-        eventSource.on(event_types.PRESET_CHANGED, () => { ensureRegexWhitelist().catch(() => {}); });
-    }
+    // REG-01：不再自动写入 ST 正则白名单（preset_allowed_regex / character_allowed_regex）。
+    //   旧实现在启动/APP_READY/CHAT_CHANGED/PRESET_CHANGED 时无条件把当前预设名与卡 avatar
+    //   push 进白名单并落盘——覆盖用户在面板「不允许」的显式选择，且曾把 "{{char}}.png" 之类
+    //   模板残留（X-7）写进 character_allowed_regex。白名单写入职责回归用户显式操作：
+    //   面板保存 scoped/preset 脚本时的 allowScopedScripts/allowPresetScripts（panel/ui.js）
+    //   与 SPreset 自身的注入逻辑。本引擎管道不依赖白名单（getRegexScripts allowedOnly=false）。
+    //   若用户未允许某预设/卡，仅 ST 原生显示通道会跳过其内嵌正则（与原版 ST 行为一致）。
 
     // 注册 generate_interceptor（F3，审查报告 L3/D7）：manifest.json 的 generate_interceptor 字段
     // 指向本全局函数，ST 在 script.js:4505（coreChat 组装后）逐条调用 —— prompt 通道 per-message

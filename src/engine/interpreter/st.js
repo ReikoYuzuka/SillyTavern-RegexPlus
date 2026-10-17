@@ -61,6 +61,11 @@ export function stChannelOk(script, { isMarkdown, isPrompt }, { generalMode = 'b
  * @returns {boolean}
  */
 export function stShouldRun(script, { placement, isMarkdown, isPrompt, isEdit, depth }, opts = {}) {
+    // REG-04：placement 显式 undefined（调用方未声明上下文）→ 与原版 getRegexedString
+    // 行为一致（脚本不跑，返回原串）。null 是本引擎内部"无上下文"约定（run() 默认参数、
+    // runScoped/存储通道不传 placement），保持放行兼容既有通道。
+    if (placement === undefined) return false;
+
     if (!stChannelOk(script, { isMarkdown, isPrompt }, opts)) return false;
 
     // 编辑链路（engine.js:356-359）

@@ -98,7 +98,9 @@ function skipCharClass(s, i) {
 
 /**
  * 扫描一段模式文本（递归），返回：
- *   quantToken —— 段内存在「被量化的原子」或「被量化的分组」；
+ *   quantToken —— 段内存在「被无界量词修饰的原子/分组」（REG-03：有界量词 ?/{n,m}
+ *                 修饰的原子不构成回溯放大，不计入——否则 (abc?)+、千分位
+ *                 \d{1,3}(?:[,，]\d{3})* 这类常见形态被误拦）；
  *   risky      —— 段内存在「嵌套量词」风险分组。
  */
 function scanRegion(s, start) {
@@ -110,18 +112,26 @@ function scanRegion(s, start) {
         const c = s[i];
         if (c === '\\') {
             i += 2;
-            if (i < n && isQuantifierStart(s[i])) { quantToken = true; i = skipQuantifier(s, i); }
+            if (i < n && isQuantifierStart(s[i])) {
+                const q = readQuantifier(s, i);
+                if (q && q.unbounded) quantToken = true;
+                i = skipQuantifier(s, i);
+            }
             continue;
         }
         if (c === '[') {
             i = skipCharClass(s, i);
-            if (i < n && isQuantifierStart(s[i])) { quantToken = true; i = skipQuantifier(s, i); }
+            if (i < n && isQuantifierStart(s[i])) {
+                const q = readQuantifier(s, i);
+                if (q && q.unbounded) quantToken = true;
+                i = skipQuantifier(s, i);
+            }
             continue;
         }
         if (c === '(') {
             const g = scanGroupAt(s, i);
             i = g.end;
-            if (g.quantified) quantToken = true;
+            if (g.quantified && g.unbounded) quantToken = true;
             if (g.risky) risky = true;
             continue;
         }
@@ -131,7 +141,11 @@ function scanRegion(s, start) {
         }
         // 字面量原子
         i++;
-        if (i < n && isQuantifierStart(s[i])) { quantToken = true; i = skipQuantifier(s, i); }
+        if (i < n && isQuantifierStart(s[i])) {
+            const q = readQuantifier(s, i);
+            if (q && q.unbounded) quantToken = true;
+            i = skipQuantifier(s, i);
+        }
     }
     return { quantToken, risky };
 }
@@ -155,7 +169,7 @@ function scanGroupAt(s, i) {
     }
     if (depth !== 0) {
         // 未闭合 —— 当作普通文本
-        return { end: n, quantified: false, risky: false };
+        return { end: n, quantified: false, unbounded: false, risky: false };
     }
     const close = j - 1;
     const body = s.slice(i + 1, close);
@@ -170,7 +184,7 @@ function scanGroupAt(s, i) {
         unbounded = q.unbounded;
     }
     const risky = quantified && unbounded && bodyInfo.quantToken;
-    return { end: qEnd, quantified, risky };
+    return { end: qEnd, quantified, unbounded, risky };
 }
 
 /**
@@ -380,11 +394,11 @@ export function withBudget({ scriptName, pattern, flags, run, budgetMs = 50, rec
     }
 
     if (elapsedMs > budgetMs) {
-        // 防线 3：事后计时超预算
-        const entry = { scriptName, timedOut: true, reason: 'budget-exceeded', elapsedMs };
+        // 防线 3：事后计时超预算（REG-02：结果已完成——丢弃成功结果只会白白浪费已花的
+        // 计算且导致脚本"随机不生效"；改为保留结果并警告，记录条目仍标注超预算供诊断）
+        const entry = { scriptName, timedOut: false, reason: 'budget-exceeded', elapsedMs };
         if (record) record(entry);
-        throttledWarn(warnKey, `[rp-hub-compat] 正则「${scriptName}」耗时 ${Math.round(elapsedMs)}ms 超过预算 ${budgetMs}ms，已跳过该脚本结果。`);
-        return { timedOut: true, reason: 'budget-exceeded', elapsedMs };
+        throttledWarn(warnKey, `[rp-hub-compat] 正则「${scriptName}」耗时 ${Math.round(elapsedMs)}ms 超过预算 ${budgetMs}ms（结果已完成，予以保留）。`);
     }
 
     const text = typeof result === 'string' ? result : result?.text;

@@ -81,6 +81,7 @@ let renderTable = null;           // 内存段渲染表（createSegmentRenderTab
 let accumulated = '';             // 累计文本缓冲（M1：continue 前缀 + 事件累计文本）
 let messageIdKnown = false;       // 消息 id 是否已确定（首个 token 后为 true）
 let streamPrefix = '';            // continue 前缀基准（GENERATION_STARTED 计算；事件载荷拼接前缀后检测）
+let streamTokenCounter = 0;       // 诊断采样计数（REG-06：每 20 token 记录一次 DOM 状态）
 // 在-flight 渲染登记表（代际令牌模型，修复 F1）：每个 renderAndApply 在入口【同步区】登记
 // {gen, messageId} 令牌，finally 必达注销 —— 结构性消除「清理清零计数后在途自减为负」
 // （旧 pendingRenders 模型缺陷）与 hung-render 永久污染（悬挂令牌只属于旧代，被谓词过滤）。
@@ -707,6 +708,7 @@ function maybeScheduleRecover(messageId) {
  */
 function onGenerationStarted(type) {
     cleanupActive();
+    streamTokenCounter = 0; // REG-06：采样计数每代重置（首个 token 必记录）
     if (!started) return;
     if (type === 'impersonate') {
         console.debug('[rp-hub-compat] 流式实时渲染：impersonate 生成无消息 DOM，跳过段接管。');
@@ -801,20 +803,25 @@ function onStreamToken(incrementalText) {
     // 累计结果，实测 token[0]='\n【开始思考】' token[1]='\n【开始思考】...' 长度递增）→
     // **覆盖** accumulated，绝不能 +=（会双重累积爆炸）；M1：continue 前缀 + 载荷（前缀不在载荷内）
     accumulated = streamPrefix + text;
-    // 记录：token + 当前 .mes_text 状态（诊断）
+    // 记录：token + 当前 .mes_text 状态（诊断）。REG-06：每 token 都做 querySelector + 8 项
+    // DOM 读取成本高——采样记录（每 20 个 token 或首个 token 一次），渲染逻辑不受影响。
     try {
-        const mt = document.querySelector(`.mes[mesid="${activeMessageId}"] .mes_text`);
-        logStream('token', {
-            summary: `len=${text.length} 尾部=${JSON.stringify(text.slice(-20))}`,
-            tokenLen: text.length,
-            tokenTail: text.slice(-20),
-            accumulatedLen: accumulated.length,
-            state: activeDetector ? activeDetector.getState() : 'no-detector',
-            mesTextLen: mt ? (mt.textContent || '').length : -1,
-            mesTextTail: mt ? (mt.textContent || '').slice(-25) : null,
-            mesHtmlHead: mt ? (mt.innerHTML || '').slice(0, 80) : null,
-            segs: mt ? mt.parentElement.querySelectorAll('.rph-stream-segment').length : 0,
-        });
+        streamTokenCounter++;
+        if (streamTokenCounter === 1 || streamTokenCounter % 20 === 0) {
+            const mt = document.querySelector(`.mes[mesid="${activeMessageId}"] .mes_text`);
+            logStream('token', {
+                summary: `#${streamTokenCounter} len=${text.length} 尾部=${JSON.stringify(text.slice(-20))}`,
+                tokenNo: streamTokenCounter,
+                tokenLen: text.length,
+                tokenTail: text.slice(-20),
+                accumulatedLen: accumulated.length,
+                state: activeDetector ? activeDetector.getState() : 'no-detector',
+                mesTextLen: mt ? (mt.textContent || '').length : -1,
+                mesTextTail: mt ? (mt.textContent || '').slice(-25) : null,
+                mesHtmlHead: mt ? (mt.innerHTML || '').slice(0, 80) : null,
+                segs: mt ? mt.parentElement.querySelectorAll('.rph-stream-segment').length : 0,
+            });
+        }
     } catch { /* 记录失败忽略 */ }
     const feed = feedSegmentDetector(activeDetector, accumulated);
     // M4 节流门控：闭合事件无条件处理（定格）；段内持续渲染按 STREAM_THROTTLE_MS 节流

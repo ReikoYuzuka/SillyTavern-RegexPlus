@@ -53,8 +53,36 @@ import { spliceFinalizedSegments, waitForPendingStreamRenders, STREAM_SKIP_CLASS
 
 // 补丁 1d：最近一次 editRecovery/forceApply 强制写回的消息（供 rescanForIframe 补发的 RENDERED
 // 识别「本次 recompute 应跳过」—— 见 pure.shouldSkipRecoveryRecompute 注释）。
-let freshWriteMessageId = null;
-let freshWriteAt = 0;
+// REG-12：从模块级单值改为 per-message Map（messageId → 时间戳）——跨消息交替时旧值
+// 不再被覆盖（编辑 A → RENDERED B → 更新 B 的交错下，A 的 freshWrite 状态不被 B 抹掉）。
+const freshWrites = new Map(); // messageId → Date.now()
+const FRESH_WRITE_WINDOW_MS = 800;
+
+/** 是否处于 freshWrite 新鲜窗口内（REG-12：per-message 状态） */
+function isFreshWrite(messageId) {
+    const at = freshWrites.get(messageId);
+    if (at === undefined) return false;
+    if (Date.now() - at >= FRESH_WRITE_WINDOW_MS) {
+        freshWrites.delete(messageId);
+        return false;
+    }
+    return true;
+}
+
+function markFreshWrite(messageId) {
+    freshWrites.set(messageId, Date.now());
+    // 防无限增长：超过 64 条清掉最旧的过期项
+    if (freshWrites.size > 64) {
+        const now = Date.now();
+        for (const [id, at] of freshWrites) {
+            if (now - at >= FRESH_WRITE_WINDOW_MS) freshWrites.delete(id);
+        }
+    }
+}
+
+function clearFreshWrite(messageId) {
+    freshWrites.delete(messageId);
+}
 
 /**
  * 双通道处理 + 显示写回（MESSAGE_RECEIVED / swipe / 编辑保存 / RENDERED 兜底共用）。
@@ -235,47 +263,59 @@ export async function coverMessage(messageId, { forceApply = false, editRecovery
 
 /** CHARACTER_MESSAGE_RENDERED：渲染后覆盖（MESSAGE_RECEIVED 已处理则直接覆盖；未处理则兜底处理）。 */
 export async function onCharacterRendered(messageId) {
-    if (!runtime.active) return;
-    const msg = runtime.chat[messageId];
-    if (!msg || msg.is_user || msg.is_system) return;
-    if (msg.extra?.rph_done) {
-        // 补丁 1d：本次 RENDERED 若由 rescanForIframe 为「刚被 editRecovery 强制写回」的消息补发，
-        // DOM 已是权威引擎显示结果 —— 跳过 recompute，避免宏非确定性（{{random}}/{{time}}）导致
-        // 重算结果 ≠ 缓存 → 覆盖 rph_display/display_text 并破坏酒馆助手刚 iframe 化的 TH-render
-        // （用户实测「取消后整个渲染没了 / 再取消模板出现但正则没了」）。
-        if (shouldSkipRecoveryRecompute(messageId, freshWriteMessageId, freshWriteAt)) {
-            freshWriteMessageId = null;
-            freshWriteAt = 0;
+    // REG-07：顶层 try/catch——事件回调异常不能悬置为 unhandled rejection
+    try {
+        if (!runtime.active) return;
+        const msg = runtime.chat[messageId];
+        if (!msg || msg.is_user || msg.is_system) return;
+        if (msg.extra?.rph_done) {
+            // 补丁 1d：本次 RENDERED 若由 rescanForIframe 为「刚被 editRecovery 强制写回」的消息补发，
+            // DOM 已是权威引擎显示结果 —— 跳过 recompute，避免宏非确定性（{{random}}/{{time}}）导致
+            // 重算结果 ≠ 缓存 → 覆盖 rph_display/display_text 并破坏酒馆助手刚 iframe 化的 TH-render
+            // （用户实测「取消后整个渲染没了 / 再取消模板出现但正则没了」）。
+            if (shouldSkipRecoveryRecompute(messageId, isFreshWrite(messageId) ? messageId : null, freshWrites.get(messageId) ?? 0)) {
+                clearFreshWrite(messageId);
+                return;
+            }
+            await coverMessage(messageId);
             return;
         }
-        await coverMessage(messageId);
-        return;
+        await processAndCover(messageId);
+    } catch (error) {
+        console.warn('[rp-hub-compat] onCharacterRendered 处理异常（不阻塞事件链）：', String(error?.message || error));
     }
-    await processAndCover(messageId);
 }
 
 /** USER_MESSAGE_RENDERED：用户消息（sendMessageAsUser 不触发 MESSAGE_RECEIVED）。 */
 export async function onUserRendered(messageId) {
-    if (!runtime.active) return;
-    const msg = runtime.chat[messageId];
-    if (!msg || !msg.is_user || msg.is_system) return;
-    if (msg.extra?.rph_done) {
-        await coverMessage(messageId);
-        return;
+    try {
+        if (!runtime.active) return;
+        const msg = runtime.chat[messageId];
+        if (!msg || !msg.is_user || msg.is_system) return;
+        if (msg.extra?.rph_done) {
+            await coverMessage(messageId);
+            return;
+        }
+        await processAndCover(messageId);
+    } catch (error) {
+        console.warn('[rp-hub-compat] onUserRendered 处理异常（不阻塞事件链）：', String(error?.message || error));
     }
-    await processAndCover(messageId);
 }
 
 /** MESSAGE_SWIPED：浏览到其它 swipe（mes 已被 syncSwipeToMes 置为 swipes[id] 原始文本）→ 重算 + 覆盖。 */
 export async function onMessageSwiped(messageId) {
-    if (!runtime.active) return;
-    const msg = runtime.chat[messageId];
-    if (!msg) return;
-    if (needsReprocess(msg)) {
-        await processAndCover(messageId, { source: msg.mes, force: true });
-        return;
+    try {
+        if (!runtime.active) return;
+        const msg = runtime.chat[messageId];
+        if (!msg) return;
+        if (needsReprocess(msg)) {
+            await processAndCover(messageId, { source: msg.mes, force: true });
+            return;
+        }
+        await coverMessage(messageId);
+    } catch (error) {
+        console.warn('[rp-hub-compat] onMessageSwiped 处理异常（不阻塞事件链）：', String(error?.message || error));
     }
-    await coverMessage(messageId);
 }
 
 /** MESSAGE_UPDATED：编辑取消 / 保存后的恢复渲染。 */
@@ -285,10 +325,10 @@ export async function onMessageUpdated(messageId) {
     if (!msg) return;
 
     // 区别判定：
-    // 若本条消息刚由 onMessageEdited 完成保存（rph_done 且 freshWriteAt 处于 800ms 新鲜窗口内），
+    // 若本条消息刚由 onMessageEdited 完成保存（rph_done 且 freshWrite 处于 800ms 新鲜窗口内），
     // 说明新渲染已生成，无需以 forceApply: true 强刷旧缓存，走普通的 coverMessage 即可。
     // 只有在非刚保存（如纯编辑取消）时，才需要 forceApply 强制恢复之前的引擎显示。
-    const isJustEdited = freshWriteMessageId === messageId && (Date.now() - freshWriteAt) < 800;
+    const isJustEdited = isFreshWrite(messageId);
 
     debugEvent('onMessageUpdated:before', messageId);
     if (isJustEdited) {
@@ -299,8 +339,7 @@ export async function onMessageUpdated(messageId) {
     debugEvent('onMessageUpdated:after-cover', messageId);
     // 补丁 1d：记录本次强制写回 —— 补发的 RENDERED 触发 onCharacterRendered 时跳过 recompute
     //（DOM 已是权威显示，避免宏非确定性重算覆盖缓存/破坏 TH iframe）。
-    freshWriteMessageId = messageId;
-    freshWriteAt = Date.now();
+    markFreshWrite(messageId);
     setTimeout(() => {
         if (!runtime.active) return;
         if (msg?.extra?.rph_template_render === true) {
@@ -320,33 +359,28 @@ export async function onMessageUpdated(messageId) {
  * （与 force-render.js rescanTavernHelper 同构；display 侧不能反向 import force-render 避免循环依赖）
  * @param {number} messageId
  */
-function clearFreshWrite() {
-    freshWriteMessageId = null;
-    freshWriteAt = 0;
-}
-
 function rescanForIframe(messageId) {
     try {
         const $mesText = runtime.chatElement.find(`.mes[mesid="${messageId}"] .mes_text`);
-        if (!$mesText || !$mesText.length) { clearFreshWrite(); return; }
+        if (!$mesText || !$mesText.length) { clearFreshWrite(messageId); return; }
         const unwrapped = hasUnwrappedFrontendPre($mesText);
         debugEvent(`rescanForIframe unwrapped=${unwrapped}`, messageId, $mesText);
         if (!unwrapped) {
             // D1 修复：无未包裹前端代码块（已 iframe 化 / 本消息无围栏）→ 补发无意义，消费 freshWrite
             // 防残留 2000ms 窗口（否则同消息后续正常 RENDERED 被误判跳过 recompute）
-            clearFreshWrite();
+            clearFreshWrite(messageId);
             return;
         }
         // 补发 RENDERED 重扫（我们自身监听幂等：DOM 已带 rph-rendered 标记，coverSkipDecision 跳过）
         eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, messageId, 'normal');
     } catch {
-        clearFreshWrite(); // D1 修复：异常路径也消费 freshWrite 防残留
+        clearFreshWrite(messageId); // D1 修复：异常路径也消费 freshWrite 防残留
         // 事件/DOM 不可用（极端情况）静默跳过 —— 事件链路的 MESSAGE_UPDATED 覆盖已恢复显示
     }
 }
 
 /**
- * 取消/覆盖链路诊断（默认开启 console.log；localStorage 置 `rphubDebugEvents=0` 可关闭）。
+ * 取消/覆盖链路诊断（REG-06：默认静默——localStorage 置 `rphubDebugEvents=1` 才输出）。
  * 输出每次编辑取消/保存与 rescan 决策的 DOM 状态（TH-render 数 / pre 数 / 未包裹前端 pre /
  * freshWrite 窗口），用于定位「编辑取消不渲染」「切换后需手动强制重新渲染」。
  * @param {string} label
@@ -355,12 +389,12 @@ function rescanForIframe(messageId) {
  */
 function debugEvent(label, messageId, $mesText = null) {
     try {
-        if (typeof localStorage !== 'undefined' && localStorage.getItem('rphubDebugEvents') === '0') return;
+        if (typeof localStorage === 'undefined' || localStorage.getItem('rphubDebugEvents') !== '1') return;
         const $t = $mesText || runtime.chatElement.find(`.mes[mesid="${messageId}"] .mes_text`);
         const th = typeof $t?.find === 'function' ? $t.find('div.TH-render').length : -1;
         const pre = typeof $t?.find === 'function' ? $t.find('pre').length : -1;
         const msg = runtime.chat[messageId];
-        console.log(`[rp-hub-compat:debug] ${label} mesid=${messageId} TH-render=${th} pre=${pre} unwrapped=${hasUnwrappedFrontendPre($t)} rph_template=${msg?.extra?.rph_template_render === true} rph_done=${msg?.extra?.rph_done === true} freshWrite=${freshWriteMessageId === messageId ? (Date.now() - freshWriteAt) + 'ms' : 'no'}`);
+        console.log(`[rp-hub-compat:debug] ${label} mesid=${messageId} TH-render=${th} pre=${pre} unwrapped=${hasUnwrappedFrontendPre($t)} rph_template=${msg?.extra?.rph_template_render === true} rph_done=${msg?.extra?.rph_done === true} freshWrite=${isFreshWrite(messageId) ? (Date.now() - freshWrites.get(messageId)) + 'ms' : 'no'}`);
     } catch { /* 诊断失败不影响主流程 */ }
 }
 
@@ -384,7 +418,6 @@ export async function ensureMessageRecovered(messageId) {
     await coverMessage(messageId, { forceApply: true, editRecovery: true });
     // 补丁 1d：同 onMessageUpdated —— 记录本次强制写回，让 rescanForIframe 补发的 RENDERED
     // 跳过 recompute（DOM 已是权威显示）。
-    freshWriteMessageId = messageId;
-    freshWriteAt = Date.now();
+    markFreshWrite(messageId);
     rescanForIframe(messageId);
 }
