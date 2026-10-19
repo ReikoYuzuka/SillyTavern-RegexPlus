@@ -45,6 +45,11 @@ import {
 } from './pure.js';
 import { fenceForMode } from '../engine/html-fence.js';
 import { renderDisplayHtml } from './render.js';
+// 显示保底（rp_hub_display_shield，默认开启）：写 DOM 后把同一份文本同步进 ST 原生
+// extra.display_text —— ST updateMessageBlock（script.js:2033-2037）按
+// `extra.display_text ?? mes` 重画楼层，第三方扩展（ST-Prompt-Template / cocktail /
+// 渲染优化器）重画时读到 display_text 就会把界面抄回去，而不是退化成原始正文。
+import { isDisplayShieldEnabled } from '../store/settings.js';
 // 方向 A（用户拍板）：coverMessage 渲染整条消息时，对流式定格段（content）做「拼合」——
 // content 段区间用流式定格结果（engineText）替换进正式引擎输出（成品在 .mes_text 正确位置，
 // 顺序 = 思维链 → content → 尾部）；STREAM_SKIP_CLASS 标记用于「已应用拼合」的幂等判定
@@ -259,6 +264,15 @@ export async function coverMessage(messageId, { forceApply = false, editRecovery
     // 写引擎结果 + rph-rendered 标记（修复 4：标记用于识别「当前 DOM 已是引擎结果」，
     // 使后续一致跳过成立；ST 用 mes 重建 DOM 时标记丢失 → 重新强制覆盖）。
     $mesText.empty().addClass(RENDER_MARK_CLASS).append(html);
+    // 显示保底（默认开启）：把本次真正落到 DOM 的文本同步进 ST 原生 display_text。
+    // 依据 script.js:2036 `const text = message?.extra?.display_text ?? message.mes` ——
+    // 任何第三方（ST-Prompt-Template / cocktail / 渲染优化器）调用 updateMessageBlock
+    // 重画本楼时都会优先读它，从而把界面「抄回去」而不是擦成原始正文
+    // （编辑取消后界面消失 = 对方读不到 display_text 只能退回 mes 的根因）。
+    // 只写显示层旁路字段，不动 mes / rph_display 缓存语义，幂等可重复执行。
+    if (isDisplayShieldEnabled() && msg && typeof msg.extra === 'object' && msg.extra !== null) {
+        msg.extra.display_text = text;
+    }
 }
 
 /** CHARACTER_MESSAGE_RENDERED：渲染后覆盖（MESSAGE_RECEIVED 已处理则直接覆盖；未处理则兜底处理）。 */

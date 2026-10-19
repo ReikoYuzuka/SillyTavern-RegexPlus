@@ -169,6 +169,15 @@
                     </div>
                 </div>
                 <small style="display:block;text-align:left;opacity:.75;margin:2px 0">脚本自定义字段（作用域/预处理等）存储位置。localStorage 关闭重开不丢；extension_settings 随 ST settings.json。切换自动迁移。</small>
+                <div class="flex-container alignItemsBaseline marginTop5">
+                    <strong style="margin-right:10px">显示保底</strong>
+                    <label class="checkbox flex-container" for="regex_display_shield_toggle">
+                        <input type="checkbox" id="regex_display_shield_toggle" class="enable_scoped" />
+                        <span class="regex-toggle-on fa-solid fa-toggle-on fa-lg" title="开启显示保底（默认）：写入界面的同时同步 display_text，第三方重画楼层时会把界面写回来"></span>
+                        <span class="regex-toggle-off fa-solid fa-toggle-off fa-lg" title="关闭显示保底：不写 display_text，第三方重画楼层时界面可能退回原始正文"></span>
+                    </label>
+                </div>
+                <small style="display:block;text-align:left;opacity:.75;margin:2px 0">默认开启。把本插件写入的显示文本同步到酒馆原生 <code>display_text</code>：其它扩展（Prompt Template / cocktail / 渲染优化器）重画这一楼时会优先读它，界面不会被擦回原始正文。关闭 = 旧行为。</small>
                 <div class="rp_stream_mode1">
                 <div class="flex-container alignItemsBaseline marginTop5">
                     <strong style="margin-right:10px">渲染模式</strong>

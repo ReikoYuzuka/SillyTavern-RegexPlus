@@ -64,6 +64,14 @@
  *       （勾 rp_skip_second_pass 的跳过）→ 界面段按原位置拼回。界面与美化正文并存，各管各的。
  *       'legacy' = 现状：顺序混跑 + 自动隔离脚本区（rp_hub_auto_protect_script 生效）。
  *       非法值归一回退 'two_pass_121'。
+ *   - rp_hub_display_shield: boolean —— 显示保底（display_text 同步）总开关。
+ *       默认 true = 开启。每次把界面写进 .mes_text 后，把同一份文本同步写进 ST 原生
+ *       `msg.extra.display_text`。依据：ST 的 updateMessageBlock（script.js:2033-2037）
+ *       按 `extra.display_text ?? mes` 重画楼层 —— 第三方扩展（ST-Prompt-Template、
+ *       cocktail、渲染优化器）重画时若读到 display_text 就会把我们的界面抄回去，
+ *       而不是退化成原始正文（编辑取消后界面被擦成纯正文的根因）。
+ *       false = 关闭（旧行为：不碰 display_text，第三方重画时界面可能丢失）。
+ *       只影响「显示层旁路」这一个字段，不改 mes / rph_display 缓存语义。
  *   - rp_hub_second_pass_enabled: boolean —— 阶段③（预设第二遍）总开关。
  *       默认 false = 关闭（用户反馈「前端卡卡的」→ 默认只跑一次阶段①，减小前端压力）；
  *       true = 开启（预设正则第二遍再跑一遍，受 rp_hub_second_pass_filter / rp_skip_second_pass
@@ -94,6 +102,7 @@ export const AUTO_PROTECT_SCRIPT_KEY = 'rp_hub_auto_protect_script';
 export const RENDER_MODE_KEY = 'rp_hub_render_mode';
 export const EXCLUDE_FIRST_MESSAGE_KEY = 'rp_hub_exclude_first_message';
 export const EXCLUDE_FIRST_FULLTEXT_KEY = 'rp_hub_exclude_first_fulltext_only';
+export const DISPLAY_SHIELD_KEY = 'rp_hub_display_shield';
 
 /** 超时预算缺省值（毫秒）与允许范围（引擎设计.md §6「每条正则预算默认 50ms」）。 */
 export const DEFAULT_BUDGET_MS = 50;
@@ -862,5 +871,34 @@ export function getStreamExcludes() {
 /** 设置流式排除规则并持久化（非法值归一）。 */
 export function setStreamExcludes(excludes) {
     extension_settings[STREAM_EXCLUDES_KEY] = normalizeStreamExcludes(excludes);
+    saveSettingsDebounced();
+}
+
+/* ---------- 显示保底（rp_hub_display_shield，默认开启） ---------- */
+
+/**
+ * 显示保底归一（纯函数，可 node 测试）：缺省 true（默认开启）；显式 ===false 关闭。
+ * 与 isPanelEscapeEnabled 同风格 —— 默认开、只有显式 false 才关。
+ * @param {*} value rp_hub_display_shield 存储值
+ * @returns {boolean}
+ */
+export function normalizeDisplayShield(value) {
+    if (value === undefined || value === null) return true; // 缺省开启
+    return value !== false;
+}
+
+/**
+ * 读取显示保底开关（默认 true = 开启）。
+ * 开启后 coverMessage 每次写 DOM 都会把同一份文本同步进 `extra.display_text`，
+ * 使 ST 原生 updateMessageBlock 在第三方重画楼层时优先读到我们的界面而非原始正文。
+ * @returns {boolean}
+ */
+export function isDisplayShieldEnabled() {
+    return normalizeDisplayShield(extension_settings?.[DISPLAY_SHIELD_KEY]);
+}
+
+/** 设置显示保底开关并持久化。 */
+export function setDisplayShieldEnabled(enabled) {
+    extension_settings[DISPLAY_SHIELD_KEY] = !!enabled;
     saveSettingsDebounced();
 }

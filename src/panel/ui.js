@@ -49,7 +49,7 @@ import {
     SCRIPT_TYPES,
     SCRIPT_TYPE_UNKNOWN,
 } from '../store/scripts.js';
-import { isCleanPromptEnabled, setCleanPromptEnabled, getOrderSource, setOrderSource, getExtrasStorageMode, setExtrasStorageMode, isProtectEnabled, setProtectEnabled, getProtectItems, setProtectItems, getDegradeTarget, setDegradeTarget, getBudgetMs, setBudgetMs, normalizeBudgetMs, isPanelEscapeEnabled, setPanelEscapeEnabled, isPrecheckEnabled, setPrecheckEnabled, getPrecheckBypass, setPrecheckBypass, isAutoProtectScriptEnabled, setAutoProtectScriptEnabled, isExcludeFirstMessageEnabled, setExcludeFirstMessageEnabled, isExcludeFirstFulltextOnly, setExcludeFirstFulltextOnly, getRenderMode, setRenderMode, getCleanRules, setCleanRules, resetCleanRules, DEFAULT_CLEAN_RULES, getSecondPassFilter, setSecondPassFilter, resetSecondPassFilter, SECOND_PASS_FILTER_MODE_ALL, SECOND_PASS_FILTER_MODE_CUSTOM, SECOND_PASS_FILTER_MODE_INCLUDE, SECOND_PASS_FILTER_MODE_EXCLUDE, isSecondPassEnabled, setSecondPassEnabled, isSkipBlankSegments, setSkipBlankSegments, isStreamRenderEnabled, setStreamRenderEnabled, getStreamMatch, setStreamMatch, DEFAULT_STREAM_MATCH, STREAM_MATCH_MODE_BASIC, STREAM_MATCH_MODE_ADVANCED, getStreamExcludes, setStreamExcludes, STREAM_EXCLUDE_ACTION_HIDE, STREAM_EXCLUDE_ACTION_DELETE, STREAM_EXCLUDE_ACTION_REPLACE } from '../store/settings.js';
+import { isCleanPromptEnabled, setCleanPromptEnabled, getOrderSource, setOrderSource, getExtrasStorageMode, setExtrasStorageMode, isProtectEnabled, setProtectEnabled, getProtectItems, setProtectItems, getDegradeTarget, setDegradeTarget, getBudgetMs, setBudgetMs, normalizeBudgetMs, isPanelEscapeEnabled, setPanelEscapeEnabled, isPrecheckEnabled, setPrecheckEnabled, getPrecheckBypass, setPrecheckBypass, isAutoProtectScriptEnabled, setAutoProtectScriptEnabled, isExcludeFirstMessageEnabled, setExcludeFirstMessageEnabled, isExcludeFirstFulltextOnly, setExcludeFirstFulltextOnly, isDisplayShieldEnabled, setDisplayShieldEnabled, getRenderMode, setRenderMode, getCleanRules, setCleanRules, resetCleanRules, DEFAULT_CLEAN_RULES, getSecondPassFilter, setSecondPassFilter, resetSecondPassFilter, SECOND_PASS_FILTER_MODE_ALL, SECOND_PASS_FILTER_MODE_CUSTOM, SECOND_PASS_FILTER_MODE_INCLUDE, SECOND_PASS_FILTER_MODE_EXCLUDE, isSecondPassEnabled, setSecondPassEnabled, isSkipBlankSegments, setSkipBlankSegments, isStreamRenderEnabled, setStreamRenderEnabled, getStreamMatch, setStreamMatch, DEFAULT_STREAM_MATCH, STREAM_MATCH_MODE_BASIC, STREAM_MATCH_MODE_ADVANCED, getStreamExcludes, setStreamExcludes, STREAM_EXCLUDE_ACTION_HIDE, STREAM_EXCLUDE_ACTION_DELETE, STREAM_EXCLUDE_ACTION_REPLACE } from '../store/settings.js';
 import { clearModeCache } from '../store/rp-mode.js';
 
 // ---------------------------------------------------------------------------
@@ -416,6 +416,9 @@ async function loadRegexScripts() {
 
     // 插件设置：渲染模式（rp_hub_render_mode，默认 two_pass_121 = 1→2→1 两阶段管线）
     $('#regex_render_mode').val(getRenderMode());
+
+    // 插件设置：显示保底（rp_hub_display_shield，默认 true = 开启）
+    $('#regex_display_shield_toggle').prop('checked', isDisplayShieldEnabled());
 
     // 插件设置：流式实时渲染（rp_hub_stream_render_enabled + rp_hub_stream_match + rp_hub_stream_excludes）
     $('#regex_stream_render_toggle').prop('checked', isStreamRenderEnabled());
@@ -2604,6 +2607,17 @@ export async function init() {
 
     // 插件设置：流式实时渲染（rp_hub_stream_render_enabled + rp_hub_stream_match + rp_hub_stream_excludes）
     bindStreamRenderEditor();
+
+    // 插件设置：显示保底（rp_hub_display_shield，默认 true = 开启）
+    // 写 DOM 后同步 ST 原生 display_text —— 第三方（Prompt Template / cocktail 等）
+    // 重画楼层时优先读到界面而不是原始正文。
+    $('#regex_display_shield_toggle').on('input', function () {
+        const isEnable = !!$(this).prop('checked');
+        setDisplayShieldEnabled(isEnable);
+        toastr.info(isEnable
+            ? t`已开启显示保底：写入界面的同时同步 display_text，其它扩展重画楼层时会把界面写回来。`
+            : t`已关闭显示保底：不再写 display_text，其它扩展重画楼层时界面可能退回原始正文。`);
+    });
 
     // 插件设置：提示词剥离（C2 管道，默认 true = 对整段 prompt 施加引擎剥离；关闭 = prompt 原样）
     $('#regex_clean_prompt_toggle').on('input', function () {

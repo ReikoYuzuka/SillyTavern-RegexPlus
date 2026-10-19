@@ -16,6 +16,11 @@ SillyTavern 正则引擎插件：RP-Hub 角色卡的正则解释器与渲染管�
 - **保护替换**：正则美化产出代码块后，后续正则不会破坏代码块。
 - **ReDoS 预检 + 超时预算**：病态正则执行前被拦截，重正则预算内掐断。
 - **triggerSlash 语义分发桥**：纯文本 `/` 开头按钮走「发消息 + 生成」，不再报 Unknown command。
+- **显示保底（默认开启）**：每次把界面写进 `.mes_text` 后，同步写酒馆原生 `extra.display_text`。
+  酒馆的 `updateMessageBlock`（`script.js:2033-2037`）按 `extra.display_text ?? mes` 重画楼层，
+  所以其它扩展（ST-Prompt-Template / cocktail / 渲染优化器）重画这一楼时会读到我们的界面
+  并把界面写回来，而不是退回原始正文——这修掉了「编辑取消 / 保存后界面变成纯正文」。
+  面板可关闭（插件设置 → 显示保底）。
 
 ## 第三方写入约定（JOIN-07）
 
