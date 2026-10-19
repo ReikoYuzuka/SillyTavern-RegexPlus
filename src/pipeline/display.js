@@ -324,9 +324,17 @@ export async function onMessageSwiped(messageId) {
         if (!msg) return;
         if (needsReprocess(msg)) {
             await processAndCover(messageId, { source: msg.mes, force: true });
-            return;
+        } else {
+            await coverMessage(messageId);
         }
-        await coverMessage(messageId);
+        // SWIPE-01：ST 的 swipe() 只发 MESSAGE_SWIPED，**不发** CHARACTER_MESSAGE_RENDERED /
+        // MESSAGE_UPDATED（script.js:10315 单事件），而酒馆助手的 iframe 化只挂在那四个渲染事件上。
+        // 结果是：我们写完围栏后无人通知酒馆助手重扫 → 切换开场白后停在 html 代码块，
+        // 必须手动发一句（触发全量补扫）才变回界面。
+        // 这里与 onMessageUpdated 同构补发一次：先 markFreshWrite 让 onCharacterRendered
+        // 跳过 recompute（宏非确定性会覆盖刚算好的显示），下一帧再重扫。
+        markFreshWrite(messageId);
+        setTimeout(() => rescanForIframe(messageId), 0);
     } catch (error) {
         console.warn('[rp-hub-compat] onMessageSwiped 处理异常（不阻塞事件链）：', String(error?.message || error));
     }
