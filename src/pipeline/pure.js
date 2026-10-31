@@ -118,8 +118,12 @@ export function isEditingDom($mesText) {
 export function snapshotRaw(msg) {
     if (!msg || typeof msg !== 'object') return null;
     msg.extra ??= {};
-    if (typeof msg.extra[RAW_MES_KEY] !== 'string') {
-        msg.extra[RAW_MES_KEY] = msg.mes;
+    const cached = msg.extra[RAW_MES_KEY];
+    // EMPTY-GUARD：只验类型会把空串当成有效快照——一次污染之后，每轮都拿空串当基准，
+    // 新内容再被覆盖成空（自锁）。这里把「空串/纯空白」视为无效，用当前 mes 重新拍照。
+    const valid = typeof cached === 'string' && cached.trim().length > 0;
+    if (!valid) {
+        msg.extra[RAW_MES_KEY] = typeof msg.mes === 'string' ? msg.mes : '';
     }
     return msg.extra[RAW_MES_KEY];
 }
@@ -365,6 +369,13 @@ export function isTemplateRendered(msg) {
  */
 export function commitMessageView(msg, { raw, display, prompt, fp } = {}) {
     msg.extra ??= {};
+    // EMPTY-GUARD（数据保命）：raw 为空串/纯空白时**绝不写回**。空串一旦进了 mes 或
+    // rph_raw_mes，下一轮 snapshotRaw 会把它当有效快照继续用，形成「污染后自锁」：
+    // 新生成的正文被反复覆盖成空。宁可这轮不接管，也不能清掉用户数据。
+    if (typeof raw !== 'string' || raw.trim().length === 0) {
+        console.warn('[rp-hub-compat] commitMessageView：raw 为空，拒绝写回（防止正文被清空）。');
+        return msg;
+    }
     // JOIN-05（多方写入竞争）：msg.mes 还原原始文本前，若本楼层已有更高修订号的外部写入
     // （ST-Prompt-Template 等共存扩展也写 chat[i].mes），保留对方版本并警告——raw 是我们
     // 处理起点，若 mes 已被他人改写，回写旧 raw 会丢失对方修改。
@@ -395,7 +406,20 @@ export function commitMessageView(msg, { raw, display, prompt, fp } = {}) {
 export function syncAfterEdit(msg, newText) {
     if (!msg || typeof msg !== 'object') return;
     msg.extra ??= {};
-    msg.extra[RAW_MES_KEY] = typeof newText === 'string' ? newText : msg.mes;
+    const next = typeof newText === 'string' ? newText : msg.mes;
+    // EMPTY-GUARD：空串/纯空白永不覆盖已有的非空备份。
+    // 触发场景（2026-10-20 定位）：ST 在编辑框已被移除时，updateMessage 回退读
+    // `.mes_text.text()`；本插件接管过的界面楼 .mes_text 里是 div.TH-render > iframe，
+    // text() 返回空串 → 空串被当作「用户编辑结果」写进 mes。若这里再同步进 rph_raw_mes，
+    // 原始正文的唯一副本就丢了（刷新也救不回）。宁可保留旧备份、丢弃这次同步。
+    if (typeof next !== 'string' || next.trim().length === 0) {
+        const keep = typeof msg.extra[RAW_MES_KEY] === 'string' ? msg.extra[RAW_MES_KEY] : '';
+        if (keep.trim().length > 0) {
+            console.warn('[rp-hub-compat] syncAfterEdit 拒绝用空串覆盖 rph_raw_mes（疑似编辑读回），保留原备份。');
+            return;
+        }
+    }
+    msg.extra[RAW_MES_KEY] = next;
     delete msg.extra[DISPLAY_KEY];
     delete msg.extra[PROMPT_KEY];
     delete msg.extra[GENERAL_KEY];
@@ -436,6 +460,11 @@ export function processMessageView({ msg, mode, scripts = [], source, runArgs = 
     if (!force && msg.extra[FLAG_KEY]) return { handled: false, reason: 'already-handled' };
 
     const raw = typeof source === 'string' ? source : snapshotRaw(msg);
+    // EMPTY-GUARD：空源不进入管线 —— 否则两个通道都在空串上跑，结果必然也是空串，
+    // 再交给 commitMessageView 就会把这一楼写废。直接放弃本轮，等有内容的事件再来。
+    if (typeof raw !== 'string' || raw.trim().length === 0) {
+        return { handled: false, reason: 'empty-raw' };
+    }
 
     // F2：存储通道（仅 st 模式；rphub 双 false 仅显示、无 general 语义）。无 general 脚本 →
     // 快速路径（当前用户 36 条 preset 无纯 general 脚本 → 零额外开销）。

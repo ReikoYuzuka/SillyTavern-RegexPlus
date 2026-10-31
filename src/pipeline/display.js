@@ -101,6 +101,17 @@ export async function processAndCover(messageId, { source, force = false, isEdit
     const msg = runtime.chat[messageId];
     if (!msg || typeof msg.mes !== 'string' || msg.mes.length === 0) return { handled: false };
     if (msg.is_system) return { handled: false };
+    // 自愈（EMPTY-GUARD）：历史污染楼（rph_raw_mes 成了空串但 mes 有正文）必须清标记重算。
+    // 否则 rph_done 会让下面的 already-handled 早退永久生效，这楼就永远显示为空。
+    if (typeof msg.mes === 'string' && msg.mes.trim().length > 0
+        && typeof msg.extra?.rph_raw_mes === 'string' && msg.extra.rph_raw_mes.trim().length === 0) {
+        console.warn('[rp-hub-compat] 检测到空串污染的原文快照，清除标记并重算（自愈）。');
+        delete msg.extra.rph_done;
+        delete msg.extra.rph_display;
+        delete msg.extra.rph_display_fp;
+        delete msg.extra.display_text;
+        delete msg.extra.rph_raw_mes;
+    }
     if (!force && msg.extra?.rph_done) {
         await coverMessage(messageId);
         return { handled: false, reason: 'already-handled' };

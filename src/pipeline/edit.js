@@ -69,9 +69,21 @@ function refillEditTextarea(textarea) {
     // 补丁 2c：回填前校验 rph_raw_mes —— 若已被「显示产物」污染（历史坏数据/竞态），
     // 回退用 msg.mes（ST 存储层文本）回填并告警，阻断污染自复制。
     const candidate = msg.extra.rph_raw_mes;
-    const fill = resolveEditSource(candidate, msg).adopt ? candidate : (typeof msg.mes === 'string' ? msg.mes : candidate);
+    let fill = resolveEditSource(candidate, msg).adopt ? candidate : (typeof msg.mes === 'string' ? msg.mes : candidate);
     if (fill !== candidate) {
         console.warn('[rp-hub-compat] 编辑回填检测到 rph_raw_mes 疑似显示产物污染，改用 mes 原文回填。');
+    }
+    // EMPTY-GUARD：备份被读回路径写空时（rph_raw_mes === ''），禁止把空串塞进编辑框 ——
+    // 否则用户看到空框、一保存就把空当编辑结果写盘（数据永久丢失）。回退用 msg.mes；
+    // 两者都空说明已经无从恢复，保持 ST 自己填的内容不动（早退，不覆盖）。
+    if (typeof fill !== 'string' || fill.trim().length === 0) {
+        const fallback = (typeof msg.mes === 'string' && msg.mes.trim().length > 0) ? msg.mes : null;
+        if (fallback === null) {
+            console.warn('[rp-hub-compat] 编辑回填：rph_raw_mes 与 mes 均为空，放弃回填（保留 ST 原内容）。');
+            return;
+        }
+        console.warn('[rp-hub-compat] 编辑回填：rph_raw_mes 为空，回退用 mes 原文。');
+        fill = fallback;
     }
 
     textarea.value = fill;
@@ -132,10 +144,39 @@ export async function onMessageEdited(messageId) {
     const msg = runtime.chat[messageId];
     if (!msg || typeof msg.mes !== 'string') return;
 
-    // MESSAGE_EDITED 是用户明确点击保存的独占事件：
-    // 无论是用户消息还是 AI 消息，msg.mes 均已由 ST updateMessage 写入最新的输入文本（Truth Source）。
-    // 信任用户保存的内容，不再通过 DOM 存在性或标签拦截回退为旧原文。
-    const source = msg.mes;
+    // EMPTY-GUARD（2026-10-20 定位的真凶）：ST updateMessage（script.js:8082）在编辑框
+    // 不存在时回退读 `.mes_text.text()`。对界面楼（.mes_text 内是 div.TH-render > iframe）
+    // 该值恒为空串，会把 mes 写空 → 落盘 → 刷新也救不回；对普通楼则读到 DOMPurify
+    // 剥掉标签后的渲染文本（预设美化标签丢失）。两者都不是用户编辑结果，必须拒收。
+    //   触发路径：messageEditCancel（script.js:8316）删掉 textarea，而 this_edit_mes_id
+    //   要到 emit(MESSAGE_UPDATED) 返回后才清（script.js:8338）；在这个窗口里点任意一条
+    //   消息的编辑按钮，`.mes_edit` 处理会先强制 messageEditDone（script.js:11840/11854）。
+    //   窗口长度 = 我们 MESSAGE_UPDATED 处理器的耗时，所以表现为“有概率”。
+    const preEditRaw = typeof msg.extra?.rph_raw_mes === 'string' ? msg.extra.rph_raw_mes : null;
+    const textareaPresent = typeof document !== 'undefined' && !!document.querySelector('#curEditTextarea');
+    const verdict = classifyEditedSave({ editedText: msg.mes, preEditRaw, textareaPresent });
+    let source = msg.mes;
+
+    if (verdict === 'readback') {
+        const recovered = (typeof preEditRaw === 'string' && preEditRaw.length > 0) ? preEditRaw : null;
+        if (recovered === null) {
+            console.warn('[rp-hub-compat] 编辑保存疑似读回，但无 rph_raw_mes 可回退，跳过重建。');
+            return;
+        }
+        source = recovered;
+        // 修回 ST 本轮写坏的数据（mes + 当前 swipe 槽），否则随后的 saveChatConditional 会落盘空串
+        msg.mes = recovered;
+        if (msg.swipe_id !== undefined && Array.isArray(msg.swipes)) {
+            msg.swipes[msg.swipe_id] = recovered;
+        }
+        console.warn('[rp-hub-compat] 编辑保存疑似读回（编辑框不在 DOM），已回退 rph_raw_mes 并修复 mes/swipes。');
+    }
+
+    if (typeof source !== 'string' || source.trim().length === 0) {
+        console.warn('[rp-hub-compat] 编辑保存得到空文本，跳过重建（防止空串覆盖正文）。');
+        return;
+    }
+
     syncAfterEdit(msg, source); // rph_raw_mes 同步为编辑后内容，清空旧显示缓存/模板标记，等待重算
 
     // F5：isEdit: true 透传 —— 存储通道（general）按原版 script.js:8100 语义，
